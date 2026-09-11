@@ -1591,19 +1591,40 @@ function saveScore() {
 function exportToPNG() {
   if (!generatedSchedule) return;
   const title = matchLabel();
-  const players = [...selectedPlayers].sort((a,b)=>{
-    const aK = generatedSchedule.some(p=>p.keeper===a)?0:1;
-    const bK = generatedSchedule.some(p=>p.keeper===b)?0:1;
-    return aK-bK||a.localeCompare(b);
+
+  // Build per-period position map: { S:[], M:[], V:[], K:[], W:[] }
+  const posMap = generatedSchedule.map(per => {
+    const map = { S:[], M:[], V:[], K:[], W:[...(per.subs||[])] };
+    Object.entries(per.posities||{}).forEach(([pl,code]) => { if (map[code]) map[code].push(pl); });
+    return map;
   });
 
-  const COL_W = 130, ROW_H = 38, NAME_W = 100, PAD = 20;
+  // Position groups top→bottom (aanval→verdediging→wissel)
+  const GROUPS = [
+    { code:'S', label:'Spits',        color:'#ef4444', fg:'#fff',     slots:2 },
+    { code:'M', label:'Middenvelder', color:'#10b981', fg:'#fff',     slots:1 },
+    { code:'V', label:'Verdediger',   color:'#3b82f6', fg:'#fff',     slots:2 },
+    { code:'K', label:'Keeper',       color:'#f59e0b', fg:'#fff',     slots:1 },
+    { code:'W', label:'Wissel',       color:'#94a3b8', fg:'#fff',     slots:2 },
+  ];
+
+  const PAD = 16;
+  const HEADER_H = 60;
+  const PERIOD_HDR_H = 42;
+  const GROUP_LBL_H = 22;
+  const SLOT_H = 34;
+  const LABEL_W = 106;
+  const COL_W = 132;
   const cols = generatedSchedule.length;
-  const W = PAD*2 + NAME_W + COL_W*cols;
-  const H = 100 + ROW_H*(players.length+1) + 60;
+
+  let bodyH = PERIOD_HDR_H;
+  GROUPS.forEach(g => { bodyH += GROUP_LBL_H + g.slots * SLOT_H; });
+
+  const W = PAD*2 + LABEL_W + COL_W*cols;
+  const H = HEADER_H + bodyH + PAD;
 
   const canvas = document.createElement('canvas');
-  canvas.width  = W * 2; // retina
+  canvas.width  = W * 2;
   canvas.height = H * 2;
   const ctx = canvas.getContext('2d');
   ctx.scale(2,2);
@@ -1612,67 +1633,91 @@ function exportToPNG() {
   ctx.fillStyle = '#f0f4f8';
   ctx.fillRect(0,0,W,H);
 
-  // Header
+  // Red header
   ctx.fillStyle = '#c1121f';
-  ctx.fillRect(0,0,W,56);
+  ctx.fillRect(0,0,W,HEADER_H);
   ctx.fillStyle = 'white';
   ctx.font = 'bold 18px -apple-system,sans-serif';
   ctx.fillText('⚽  JO10 Wisselschema', PAD, 26);
   ctx.font = '13px -apple-system,sans-serif';
   ctx.fillText(title + '  ·  ' + new Date().toLocaleDateString('nl-NL'), PAD, 44);
 
-  // Table header
-  const tableTop = 70;
+  const tableLeft = PAD + LABEL_W;
+  let y = HEADER_H;
+
+  // Period header row
   ctx.fillStyle = '#2d3748';
-  ctx.fillRect(PAD, tableTop, NAME_W, ROW_H);
-  generatedSchedule.forEach((_,i) => {
-    ctx.fillRect(PAD+NAME_W+i*COL_W, tableTop, COL_W-2, ROW_H);
-  });
-  ctx.fillStyle = 'white';
-  ctx.font = 'bold 12px -apple-system,sans-serif';
-  ctx.fillText('Speler', PAD+8, tableTop+24);
-  generatedSchedule.forEach((p,i) => {
-    ctx.fillText('Periode '+p.periode, PAD+NAME_W+i*COL_W+8, tableTop+20);
+  ctx.fillRect(PAD, y, LABEL_W-2, PERIOD_HDR_H);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 11px -apple-system,sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('POSITIE', PAD + (LABEL_W-2)/2, y + PERIOD_HDR_H/2 + 4);
+  generatedSchedule.forEach((per,i) => {
+    const x = tableLeft + i*COL_W;
+    ctx.fillStyle = '#2d3748';
+    ctx.fillRect(x, y, COL_W-2, PERIOD_HDR_H);
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 13px -apple-system,sans-serif';
+    ctx.fillText('Periode ' + per.periode, x + COL_W/2, y + 18);
     ctx.font = '10px -apple-system,sans-serif';
-    ctx.fillText(PERIOD_TIMES[i], PAD+NAME_W+i*COL_W+8, tableTop+33);
-    ctx.font = 'bold 12px -apple-system,sans-serif';
+    ctx.fillText(PERIOD_TIMES[i], x + COL_W/2, y + 32);
   });
+  ctx.textAlign = 'left';
+  y += PERIOD_HDR_H;
 
-  // Table rows
-  const POS_COLOR = { K:'#fcd34d', V:'#3b82f6', M:'#10b981', S:'#ef4444', W:'#e2e8f0' };
-  const POS_FG    = { K:'#78350f', V:'#fff', M:'#fff', S:'#fff', W:'#4a5568' };
-
-  players.forEach((player,ri) => {
-    const y = tableTop + ROW_H*(ri+1);
-    ctx.fillStyle = ri%2===0 ? '#ffffff' : '#f7fafc';
-    ctx.fillRect(PAD, y, W-PAD*2, ROW_H);
-
-    ctx.fillStyle = '#1a202c';
-    ctx.font = '12px -apple-system,sans-serif';
-    ctx.fillText(player, PAD+8, y+ROW_H/2+4);
-
-    generatedSchedule.forEach((per,ci) => {
-      const code = per.subs.includes(player) ? 'W' : (per.posities[player]||'?');
-      const bx = PAD+NAME_W+ci*COL_W+8;
-      const by = y+6;
-      const bw = COL_W-20, bh = ROW_H-12;
-      ctx.fillStyle = POS_COLOR[code]||'#e2e8f0';
-      roundRect(ctx, bx, by, bw, bh, 5);
-      ctx.fill();
-      ctx.fillStyle = POS_FG[code]||'#1a202c';
-      ctx.font = 'bold 11px -apple-system,sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText((POS_ICON[code]||'')+'  '+(POS_LABEL_FULL[code]||code), bx+bw/2, by+bh/2+4);
-      ctx.textAlign = 'left';
+  // Position groups
+  GROUPS.forEach(g => {
+    // Group label row
+    ctx.fillStyle = g.color;
+    ctx.fillRect(PAD, y, LABEL_W-2, GROUP_LBL_H);
+    ctx.fillStyle = g.fg;
+    ctx.font = 'bold 10px -apple-system,sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(g.label.toUpperCase(), PAD + (LABEL_W-2)/2, y + GROUP_LBL_H/2 + 3);
+    // Tinted bg across period columns
+    generatedSchedule.forEach((_,i) => {
+      ctx.fillStyle = g.color + '18';
+      ctx.fillRect(tableLeft + i*COL_W, y, COL_W-2, GROUP_LBL_H);
     });
-  });
+    ctx.textAlign = 'left';
+    y += GROUP_LBL_H;
 
-  // Keeper footer
-  const fy = tableTop + ROW_H*(players.length+1) + 8;
-  const k1=generatedSchedule[0].keeper, k2=generatedSchedule[2].keeper;
-  ctx.fillStyle = '#4a5568';
-  ctx.font = '11px -apple-system,sans-serif';
-  ctx.fillText(`🧤  ${k1} (P1–P2)  ·  ${k1!==k2?k2+' (P3–P4)':'zelfde keeper hele wedstrijd'}`, PAD, fy);
+    // Slot rows
+    for (let slot = 0; slot < g.slots; slot++) {
+      const rowBg = slot%2===0 ? '#ffffff' : '#f7fafc';
+      ctx.fillStyle = rowBg;
+      ctx.fillRect(PAD, y, LABEL_W-2, SLOT_H);
+      // Slot indicator in label col
+      ctx.fillStyle = '#cbd5e0';
+      ctx.font = '10px -apple-system,sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(String(slot+1), PAD + (LABEL_W-2)/2, y + SLOT_H/2 + 3);
+
+      generatedSchedule.forEach((per,i) => {
+        const x = tableLeft + i*COL_W;
+        const name = (posMap[i][g.code]||[])[slot];
+        ctx.fillStyle = rowBg;
+        ctx.fillRect(x, y, COL_W-2, SLOT_H);
+        if (name) {
+          const cx = x+8, cy = y + SLOT_H/2 - 11, cw = COL_W-18, ch = 22;
+          ctx.fillStyle = g.color;
+          roundRect(ctx, cx, cy, cw, ch, 5);
+          ctx.fill();
+          ctx.fillStyle = g.fg;
+          ctx.font = 'bold 12px -apple-system,sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText(name, cx + cw/2, y + SLOT_H/2 + 4);
+        } else {
+          ctx.fillStyle = '#d1d5db';
+          ctx.font = '11px -apple-system,sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText('—', x + COL_W/2, y + SLOT_H/2 + 4);
+        }
+      });
+      ctx.textAlign = 'left';
+      y += SLOT_H;
+    }
+  });
 
   canvas.toBlob(async blob => {
     const file = new File([blob], 'JO10_wisselschema.png', { type: 'image/png' });
