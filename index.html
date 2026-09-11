@@ -1674,27 +1674,29 @@ function exportToPNG() {
   ctx.font = '11px -apple-system,sans-serif';
   ctx.fillText(`🧤  ${k1} (P1–P2)  ·  ${k1!==k2?k2+' (P3–P4)':'zelfde keeper hele wedstrijd'}`, PAD, fy);
 
-  const dataUrl = canvas.toDataURL('image/png');
-  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+  canvas.toBlob(async blob => {
+    const file = new File([blob], 'JO10_wisselschema.png', { type: 'image/png' });
 
-  if (isIOS) {
-    // iOS Safari doesn't support <a download> — open image in new tab, user long-presses to save
-    const w = window.open('', '_blank');
-    if (w) {
-      w.document.write(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Wisselschema</title></head><body style="margin:0;background:#111;display:flex;flex-direction:column;align-items:center;padding:16px;gap:12px;font-family:sans-serif">
-        <img src="${dataUrl}" style="max-width:100%;border-radius:8px;">
-        <p style="color:#aaa;font-size:14px;text-align:center">Druk lang op de afbeelding → Bewaar in Foto's</p>
-      </body></html>`);
-      w.document.close();
+    // Web Share API: opent iOS-deelblad (Bewaar in Foto's, WhatsApp, etc.)
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file], title: 'JO10 Wisselschema' });
+        return;
+      } catch (e) { /* gebruiker annuleerde */ return; }
     }
-  } else if (window.location.protocol === 'data:' || window.location.href.startsWith('data:')) {
-    window.open(dataUrl, '_blank');
-  } else {
-    const link = document.createElement('a');
-    link.download = 'JO10_wisselschema.png';
-    link.href = dataUrl;
-    link.click();
-  }
+
+    // Desktop: directe download
+    const dataUrl = URL.createObjectURL(blob);
+    if (window.location.protocol === 'data:' || window.location.href.startsWith('data:')) {
+      window.open(canvas.toDataURL('image/png'), '_blank');
+    } else {
+      const link = document.createElement('a');
+      link.download = 'JO10_wisselschema.png';
+      link.href = dataUrl;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(dataUrl), 1000);
+    }
+  }, 'image/png');
 }
 
 function roundRect(ctx, x, y, w, h, r) {
