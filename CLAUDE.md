@@ -146,3 +146,8 @@ Owner van de DOM-shell en navigatie. Schermen: `wedstrijd` (voorbereiden), `live
 - UI testen: `python3 -m http.server` in de repo-root en Playwright/Chromium (`/opt/pw-browsers`). Firebase is in de
   ontwikkelcontainer niet bereikbaar; de app moet dan netjes lokaal blijven werken (status "offline").
 - Mobiel eerst: 375px breed, touch-targets ≥ 44px, geen horizontale scroll. Licht én donker thema.
+
+## Bekende beperkingen
+- Firebase bewaart geen lege arrays: bij precies 6 spelers komt `wissels: []` terug als ontbrekend veld. v2 leest dat
+  defensief; v1.html crasht daarop (bestond al in v1 bij eigen 6-spelerswedstrijden). v1 is alleen nog terugvaloptie.
+- Echte Firebase-sync en de CDN's zijn in de ontwikkelcontainer niet bereikbaar; die paden zijn met fakes getest.

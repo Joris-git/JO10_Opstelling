@@ -210,6 +210,8 @@ ul, ol { list-style: none; }
 .card--accent p { margin-bottom: 10px; }
 .card__head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
 .card__head .card__title { margin-bottom: 0; }
+/* scrollIntoView (voortgangsbalk, "Maak wisselschema") niet onder de sticky header + voortgang laten vallen */
+#screen-wedstrijd .card, #w-generate { scroll-margin-top: calc(var(--hdr-h) + var(--safe-t) + 64px); }
 .card__title { font-size: 1.05rem; font-weight: 750; display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
 .step-num {
   width: 26px; height: 26px; border-radius: 50%; flex: none;
@@ -256,8 +258,9 @@ ul, ol { list-style: none; }
 .btn--ghost { background: transparent; color: var(--muted); }
 .btn--ghost:hover:not(:disabled) { background: var(--bg2); color: var(--text); }
 .btn--danger { background: var(--danger); color: #fff; }
-.btn--danger-ghost { background: transparent; color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
-.btn--danger-ghost:hover { background: color-mix(in srgb, var(--danger) 10%, transparent); }
+/* color-mix() pas vanaf iOS 16.2: steeds eerst een gewone terugval-waarde */
+.btn--danger-ghost { background: transparent; color: var(--danger); border-color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
+.btn--danger-ghost:hover { background: var(--bg2); background: color-mix(in srgb, var(--danger) 10%, transparent); }
 .btn--sm { padding: 8px 12px; font-size: 0.88rem; }
 .btn--lg { min-height: 52px; font-size: 1rem; }
 .btn--xl { min-height: 60px; width: 100%; font-size: 1.12rem; border-radius: 16px; }
@@ -316,7 +319,7 @@ input[type="date"].input { min-width: 0; }
 }
 .seg__btn[aria-pressed="true"] { background: var(--card); color: var(--primary); box-shadow: var(--shadow); }
 .seg--sm { width: auto; }
-.seg--sm .seg__btn { min-height: 40px; font-size: 0.86rem; padding: 0 12px; }
+.seg--sm .seg__btn { min-height: 40px; min-width: 44px; font-size: 0.86rem; padding: 0 12px; }
 
 .switch { display: flex; align-items: center; gap: 12px; min-height: 44px; cursor: pointer; font-weight: 600; font-size: 0.92rem; margin-top: 8px; }
 .switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
@@ -329,6 +332,7 @@ input[type="date"].input { min-width: 0; }
 /* ══ Voortgang ═══════════════════════════════════════════════════════ */
 .progress {
   position: sticky; top: calc(var(--hdr-h) + var(--safe-t)); z-index: 50;
+  background: var(--bg);
   background: color-mix(in srgb, var(--bg) 88%, transparent);
   -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
   border-bottom: 1px solid var(--border);
@@ -365,7 +369,7 @@ input[type="date"].input { min-width: 0; }
 .pchip.is-on { border-color: var(--success); background: var(--success-bg); color: var(--text); }
 .pchip.is-on .pchip__check { background: var(--success); }
 .pchip__tag { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.04em; background: var(--bg2); color: var(--muted); padding: 1px 6px; border-radius: 6px; }
-.pchip-wrap .pchip:has(+ .pchip__x) { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.pchip-wrap .pchip--guest { border-top-right-radius: 0; border-bottom-right-radius: 0; }
 .pchip__x {
   min-height: 44px; width: 36px; border: 2px solid var(--border); border-left: none;
   border-radius: 0 999px 999px 0; color: var(--muted); background: var(--card); font-size: 0.8rem;
@@ -389,7 +393,7 @@ input[type="date"].input { min-width: 0; }
 .fair__word { font-weight: 750; flex: 1; }
 .fair__score { font-size: 1.25rem; font-weight: 850; }
 .fair__score small { font-size: 0.7rem; color: var(--muted); font-weight: 600; }
-.meter { height: 8px; border-radius: 999px; background: color-mix(in srgb, var(--muted) 22%, transparent); overflow: hidden; }
+.meter { height: 8px; border-radius: 999px; background: var(--border); background: color-mix(in srgb, var(--muted) 22%, transparent); overflow: hidden; }
 .meter span { display: block; height: 100%; border-radius: inherit; transition: width 0.3s ease; }
 .fair--good .meter span { background: #22c55e; } .fair--good .fair__word { color: var(--success); }
 .fair--ok .meter span { background: #84cc16; }
@@ -465,7 +469,7 @@ span.pc { cursor: default; }
 .dot.is-on { background: var(--primary); width: 18px; border-radius: 4px; }
 
 /* ══ Schema: tabel ═══════════════════════════════════════════════════ */
-.table-wrap { overflow-x: auto; margin: 0 calc(-1 * var(--gutter)); padding: 0 var(--gutter); -webkit-overflow-scrolling: touch; }
+.table-wrap { position: relative; overflow-x: auto; margin: 0 calc(-1 * var(--gutter)); padding: 0 var(--gutter); -webkit-overflow-scrolling: touch; }
 .sched { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.9rem; }
 .sched th, .sched td { padding: 3px; text-align: center; border-bottom: 1px solid var(--border); }
 .sched thead th { background: var(--accent); color: var(--on-accent); font-size: 0.8rem; font-weight: 750; padding: 8px 4px; border-bottom: none; }
@@ -557,7 +561,7 @@ span.pc { cursor: default; }
   padding: 8px 12px 8px 8px; border-radius: 12px; background: var(--bg2); text-align: left;
   transition: background 0.12s;
 }
-.mrow:hover { background: color-mix(in srgb, var(--bg2) 80%, var(--border)); }
+.mrow:hover { background: var(--border); background: color-mix(in srgb, var(--bg2) 80%, var(--border)); }
 .mrow__date {
   width: 46px; height: 46px; border-radius: 10px; background: var(--card); flex: none;
   display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1.05;
@@ -624,7 +628,7 @@ span.pc { cursor: default; }
 .prow__meta:empty { display: none; }
 .prow__chev { color: var(--muted); font-size: 1.4rem; }
 .tag { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 0 6px; font-weight: 700; font-size: 0.7rem; }
-.tag--avoid { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, transparent); }
+.tag--avoid { color: var(--danger); border-color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, transparent); }
 .add-row { display: flex; gap: 8px; margin-top: 12px; }
 .add-row .input { flex: 1; min-width: 0; }
 .set-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 52px; }
@@ -637,7 +641,7 @@ span.pc { cursor: default; }
   min-height: 44px; border-radius: 10px; border: 2px solid var(--border); background: var(--card);
   font-weight: 650; font-size: 0.88rem; color: var(--text); padding: 0 8px;
 }
-.avoid-btn.is-on { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, var(--card)); color: var(--danger); text-decoration: line-through; }
+.avoid-btn.is-on { border-color: var(--danger); background: var(--primary-soft); background: color-mix(in srgb, var(--danger) 12%, var(--card)); color: var(--danger); text-decoration: line-through; }
 .explain summary { min-height: 44px; display: flex; align-items: center; font-weight: 750; cursor: pointer; list-style: none; }
 .explain summary::-webkit-details-marker { display: none; }
 .explain summary::after { content: '▾'; margin-left: auto; color: var(--muted); transition: transform 0.15s; }
@@ -662,6 +666,7 @@ span.pc { cursor: default; }
 .tabbar {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 100;
   height: calc(var(--tab-h) + var(--safe-b)); padding-bottom: var(--safe-b);
+  background: var(--card);
   background: color-mix(in srgb, var(--card) 94%, transparent);
   -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
   border-top: 1px solid var(--border);
@@ -734,6 +739,10 @@ body.has-sheet .toast-root { bottom: auto; top: calc(12px + var(--safe-t)); z-in
 
 /* ══ Live-host (inhoud komt van live.js/live.css) ════════════════════ */
 .live-host { min-height: 50vh; }
+/* Live-sheets (z-index 50/51 in live.css) moeten boven de vaste header en tabbalk (z-index 100) liggen,
+   anders valt de bevestigknop ("Afronden") achter de tabbalk. */
+#live-host .live-sheet-backdrop { z-index: 990; }
+#live-host .live-sheet { z-index: 991; }
 
 /* ══ Breder scherm ═══════════════════════════════════════════════════ */
 @media (min-width: 640px) {

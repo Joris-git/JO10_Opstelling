@@ -431,6 +431,11 @@
     el.classList.remove('is-in');
     setTimeout(() => el.remove(), reducedMotion() ? 0 : 220);
   }
+  // "Ongedaan"-toasts horen bij één specifieke wijziging: na een nieuwe wijziging of een undo
+  // zou de knop een ándere stap terugdraaien, dus dan weghalen.
+  function dismissActionToasts() {
+    $$('#toast-root .toast').forEach(el => { if (el.querySelector('.toast__btn')) dismissToast(el, el.dataset.toast); });
+  }
 
   // ═══════════════════════════════════════════════════════════════════
   // Bottom-sheet / dialogen
@@ -723,7 +728,7 @@
     const n = d.aanwezig.length; const min = MIN_PLAYERS();
     const chips = names.map(name => {
       const on = d.aanwezig.includes(name); const guest = d.guests.includes(name);
-      return `<span class="pchip-wrap"><button type="button" class="pchip${on ? ' is-on' : ''}" data-act="att-toggle" data-name="${esc(name)}" aria-pressed="${on}">
+      return `<span class="pchip-wrap"><button type="button" class="pchip${on ? ' is-on' : ''}${guest ? ' pchip--guest' : ''}" data-act="att-toggle" data-name="${esc(name)}" aria-pressed="${on}">
         <span class="pchip__check" aria-hidden="true">${on ? '✓' : ''}</span><span class="pchip__name">${esc(name)}</span>${guest ? '<span class="pchip__tag">gast</span>' : ''}</button>${guest ? `<button type="button" class="pchip__x" data-act="remove-guest" data-name="${esc(name)}" aria-label="Gast ${esc(name)} verwijderen">✕</button>` : ''}</span>`;
     }).join('');
     let hint;
@@ -937,9 +942,11 @@
     const d = S.draft;
     S.undo.push(clone({ periodes: d.periodes, keepers: d.keepers, locks: d.locks, sig: d.sig, sameKeeper: d.sameKeeper }));
     if (S.undo.length > 30) S.undo.shift();
+    dismissActionToasts();
   }
   function doUndo() {
     const snap = S.undo.pop(); if (!snap) return;
+    dismissActionToasts();
     Object.assign(S.draft, snap); S.draft.dirty = true; S.sel = null; S.genWarnings = [];
     persistDraft();
     refreshDraftUI(['keepers', 'generate', 'schema', 'actions']);
@@ -1073,7 +1080,15 @@
       periodes, v: 2, aanwezig: d.aanwezig.slice(), keepers: d.keepers.slice(),
     });
   }
-  async function doSave() {
+  // Eén opslag tegelijk: een dubbele tik (of "Opslaan" + "Start live") tijdens een trage Firebase-flush
+  // mag geen tweede wedstrijd met een nieuw Date.now()-id aanmaken.
+  let savePending = null;
+  function doSave() {
+    if (savePending) return savePending;
+    savePending = doSaveNow().finally(() => { savePending = null; });
+    return savePending;
+  }
+  async function doSaveNow() {
     const d = S.draft;
     if (!d.periodes || !d.periodes.length) { toast('Maak eerst een wisselschema — zonder schema kan er niets opgeslagen worden.', 'warn'); scrollIntoView($('#w-generate')); return null; }
     if (isStale(d)) {
@@ -1082,7 +1097,11 @@
     }
     const match = buildMatch(d);
     let saved;
-    try { saved = await St.saveMatch(match); } catch (e) { reportError(e, errMsg(e, 'Opslaan mislukt. Probeer het nog eens.')); return null; }
+    try { saved = await St.saveMatch(match); } catch (e) {
+      // Store.saveMatch schrijft lokaal vóór de (eventueel time-out-ende) flush: staat hij er toch, dan id vasthouden.
+      if (findMatch(match.id)) { d.savedId = match.id; persistDraft(true); }
+      reportError(e, errMsg(e, 'Opslaan mislukt. Probeer het nog eens.')); return null;
+    }
     const rec = saved && saved.id != null ? saved : match;
     d.savedId = rec.id; d.dirty = false;
     persistDraft(true);
@@ -1188,9 +1207,19 @@
     if (f) try { f(); } catch (e) { console.warn('[JO10] Live.unmount', e); }
   }
   function exitLive() {
+    const id = S.liveMounted;
     unmountLive();
     S.liveMatchId = null; saveUI();
     if (S.screen === 'live') renderLive();
+    // Live wist zijn klokstatus alleen bij "Afronden"; bij "‹ Terug" loopt de klok door.
+    let running = false;
+    try { running = String(id) in JSON.parse(localStorage.getItem(C().LS_LIVE || 'jo10_live_v2') || '{}'); } catch (e) { /* negeren */ }
+    if (id != null && !running) {
+      const m = rawMatch(id), sc = m && m.score;
+      toast(sc ? `🏁 Eindstand ${sc.home}–${sc.away} opgeslagen` : '🏁 Wedstrijd afgerond', 'success');
+    } else if (id != null) {
+      toast('⏱️ De klok loopt door — tik de wedstrijd aan om terug te gaan.');
+    }
   }
   // Live geeft alleen een patch { id, score, goals }. Altijd mergen in de ACTUELE versie uit de Store, zodat
   // wijzigingen van een ander toestel (opstelling, notitie…) niet door een verouderde kopie overschreven worden.
@@ -1396,7 +1425,14 @@
   async function editMatch(id) {
     const m = findMatch(id); if (!m) return;
     if (!m.periodes.length) { toast('Deze wedstrijd heeft geen opstelling.', 'warn'); return; }
-    if (hasUnsaved(S.draft) && !sameId(S.draft.savedId, id)) {
+    if (hasUnsaved(S.draft) && sameId(S.draft.savedId, id)) {
+      // Deze wedstrijd staat al open met niet-opgeslagen wijzigingen: die niet stil overschrijven.
+      go('wedstrijd', { top: true });
+      setTimeout(() => scrollIntoView($('#w-schema')), 40);
+      toast('Deze opstelling staat al open, met je wijzigingen die nog niet zijn opgeslagen', 'info');
+      return;
+    }
+    if (hasUnsaved(S.draft)) {
       const ok = await confirmDialog({ title: 'Huidige opstelling vervangen?', message: 'Je opstelling op het Wedstrijd-scherm is nog niet opgeslagen. Die gaat verloren.', ok: 'Vervangen', danger: true });
       if (!ok) return;
     }
@@ -1490,7 +1526,7 @@
     const fmtTs = ts => { const d = new Date(+ts); return isNaN(d) ? '' : d.toLocaleString('nl-NL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }); };
     return `<details class="trash"${S.trashOpen ? ' open' : ''} data-toggle="trash"><summary>🗑️ Prullenbak / herstellen <span class="count-badge">${items.length}</span></summary>
       ${items.length ? `<p class="hint">Wedstrijden die verwijderd zijn of bij het synchroniseren verdwenen. Alleen op dit apparaat bewaard.</p>
-      <ul class="trash__list">${items.map(it => { const m = it.match; return `<li class="trash__item">
+      <ul class="trash__list">${items.map(it => { const m = normMatch(it.match); return `<li class="trash__item">
         <span class="trash__main"><b>${esc(m.tegenstander || m.titel || 'Onbekend')}</b>
           <small>${esc(m.datum ? fmtDate(m.datum) : '–')} · weg sinds ${esc(fmtTs(it.removedAt))}${it.reason ? ` · ${esc(TRASH_REASON[it.reason] || it.reason)}` : ''}</small></span>
         <button type="button" class="btn btn--secondary btn--sm" data-act="trash-restore" data-id="${esc(m.id)}">Herstel</button></li>`; }).join('')}</ul>`
@@ -1539,9 +1575,9 @@
         <label class="switch"><input type="checkbox" name="active"${p.active ? ' checked' : ''}><span class="switch__track" aria-hidden="true"></span><span>Actief (staat standaard bij aanwezig)</span></label>
         <div class="field"><span class="field__label" id="lbl-avoid">Liever niet op…</span>
           <div class="avoid-row" role="group" aria-labelledby="lbl-avoid">${FIELD.map(c => `<button type="button" class="avoid-btn${p.avoid.includes(c) ? ' is-on' : ''}" data-act="ep-avoid" data-code="${c}" aria-pressed="${p.avoid.includes(c)}">${esc(POS(c).icon)} ${esc(POS(c).label)}</button>`).join('')}</div>
-          <p class="hint">“Keeper” uit = wordt niet als keeper voorgesteld.</p></div>
-        <label class="field"><span class="field__label">Bijnamen / oude namen</span><input class="input" name="aliases" value="${esc(p.aliases.join(', '))}" placeholder="bijv. bas, B."></label>
-        <p class="hint">Gescheiden door komma’s. Zo herkent de import “bas” als ${esc(p.name)} en blijft de historie gekoppeld.</p>
+          <p class="hint">Rood doorgestreept = liever niet. Met “Keeper” aan wordt de speler niet als keeper voorgesteld.</p></div>
+        <label class="field"><span class="field__label">Bijnamen / oude namen</span><input class="input" name="aliases" value="${esc(p.aliases.join(', '))}" placeholder="bijv. Bas, Bassie"></label>
+        <p class="hint">Gescheiden door komma’s. Zo herkennen de Excel-import en het seizoensoverzicht die namen als ${esc(p.name)}.</p>
         <button type="submit" hidden></button>
       </form>`,
       actions: `<button type="button" class="btn btn--danger-ghost" data-act="ep-delete">🗑️</button>

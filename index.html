@@ -26,8 +26,20 @@
   <!-- Externe libs (vaste versies). De app werkt ook als deze niet laden.
        SheetJS is async: alleen nodig bij import/export, mag de app niet ophouden. -->
   <script async src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-  <script defer src="https://cdn.jsdelivr.net/npm/firebase@10.12.2/firebase-app-compat.js"></script>
-  <script defer src="https://cdn.jsdelivr.net/npm/firebase@10.12.2/firebase-database-compat.js"></script>
+  <!-- Firebase wordt op de achtergrond geladen (in volgorde: app, dan database), zodat een trage
+       verbinding langs de lijn de app niet ophoudt. Store koppelt zodra firebase.database bestaat. -->
+  <script>
+    (function () {
+      var base = 'https://cdn.jsdelivr.net/npm/firebase@10.12.2/';
+      function load(file, next) {
+        var s = document.createElement('script');
+        s.src = base + file; s.async = true;
+        if (next) s.onload = next;
+        document.head.appendChild(s);
+      }
+      load('firebase-app-compat.js', function () { load('firebase-database-compat.js'); });
+    })();
+  </script>
 
   <link rel="stylesheet" href="css/app.css" />
   <link rel="stylesheet" href="css/live.css" />

@@ -297,9 +297,9 @@
 .live-empty .live-btn { width: 100%; }
 
 /* ── Sheet (onderin) ── */
-.live-sheet-backdrop { position: fixed; inset: 0; z-index: 50; background: rgba(0, 0, 0, 0.5); animation: live-fade 0.15s; }
+.live-sheet-backdrop { position: fixed; inset: 0; z-index: 990; background: rgba(0, 0, 0, 0.5); animation: live-fade 0.15s; }
 .live-sheet {
-  position: fixed; z-index: 51; left: 0; right: 0; bottom: 0; max-width: 560px; margin: 0 auto;
+  position: fixed; z-index: 991; left: 0; right: 0; bottom: 0; max-width: 560px; margin: 0 auto;
   max-height: 85vh; overflow-y: auto;
   padding: 22px 16px calc(18px + env(safe-area-inset-bottom, 0px));
   border-radius: 22px 22px 0 0; background: var(--live-card); color: var(--live-text);

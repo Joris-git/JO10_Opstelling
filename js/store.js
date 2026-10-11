@@ -547,7 +547,11 @@
 
   function startSync() {
     const fb = envFirebase();
-    if (!fb || typeof fb.database !== 'function') { setStatus('offline'); return; }
+    if (!fb || typeof fb.database !== 'function') {
+      setStatus('offline');
+      waitForFirebase();
+      return;
+    }
     try {
       const C = cfg();
       if (typeof fb.initializeApp === 'function' && (!fb.apps || !fb.apps.length)) fb.initializeApp(C.FIREBASE);
@@ -590,10 +594,27 @@
     }
   }
 
+  // Firebase laadt asynchroon (index.html). Zolang het er nog niet is: even blijven kijken (max ~60 s),
+  // alleen in de browser en niet als tests een eigen firebase injecteren.
+  function waitForFirebase() {
+    if (S.fbWait || 'firebase' in envOverride || typeof window === 'undefined') return;
+    const started = Date.now();
+    S.fbWait = setInterval(() => {
+      const fb = envFirebase();
+      if (fb && typeof fb.database === 'function') {
+        clearInterval(S.fbWait); S.fbWait = null;
+        if (!S.refs) startSync();
+      } else if (Date.now() - started > 60000) {
+        clearInterval(S.fbWait); S.fbWait = null;
+      }
+    }, 300);
+  }
+
   function init(opts) {
     opts = opts || {};
     if (opts.env) _setEnv(opts.env);
     teardown();
+    if (S.fbWait) clearInterval(S.fbWait);
     S = freshState(S.statusCbs);
     S.onChange = opts.onChange || null;
     loadCache();
