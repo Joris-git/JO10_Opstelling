@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Live harness</title>
+  <link rel="stylesheet" href="../css/live.css">
+  <style>
+    /* Minimale kopie van de gedeelde thema-variabelen (normaal uit app.css). */
+    :root { --bg:#f0f4f8; --card:#fff; --text:#1a202c; --text-muted:#5a6577; --border:#e2e8f0;
+            --primary:#e63946; --primary-dark:#c1121f; --success:#38a169; }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) { --bg:#111827; --card:#1f2937; --text:#f9fafb; --text-muted:#9ca3af; --border:#374151; }
+    }
+    :root[data-theme="dark"] { --bg:#111827; --card:#1f2937; --text:#f9fafb; --text-muted:#9ca3af; --border:#374151; }
+    html, body { margin: 0; background: var(--bg); color: var(--text); }
+    .harness-bar { display:flex; flex-wrap:wrap; gap:6px; padding:6px 12px; font:12px system-ui; color:var(--text-muted); }
+    .harness-bar button { font:inherit; padding:4px 8px; }
+  </style>
+</head>
+<body>
+  <div class="harness-bar" id="bar">
+    <button data-h="reset">Reset klok</button>
+    <button data-h="ff">+1 min</button>
+    <button data-h="almost">Bijna einde</button>
+    <button data-h="empty">Zonder opstelling</button>
+    <button data-h="mount">Opnieuw mounten</button>
+    <button data-h="remote">Remote: P2-wissels wijzigen</button>
+  </div>
+  <div id="live"></div>
+
+  <script src="../js/config.js"></script>
+  <script src="../js/live.js"></script>
+  <script>
+    const match = {
+      id: 1760000000000,
+      titel: 'JO10 vs FC Stein (🏠 Thuis)',
+      datum: '2026-10-11',
+      tegenstander: 'FC Stein',
+      thuisUit: 'thuis',
+      score: null,
+      v: 2,
+      aanwezig: ['Noud', 'Bastiaan', 'James', 'Giulio', 'Bram', 'Coen', 'Izzy', 'Abel'],
+      keepers: ['James', 'James', 'Giulio', 'Giulio'],
+      goals: [],
+      periodes: [
+        { posities: { James: 'K', Coen: 'V', Bastiaan: 'V', Izzy: 'M', Noud: 'S', Abel: 'S' }, wissels: ['Bram', 'Giulio'] },
+        { posities: { James: 'K', Bastiaan: 'V', Giulio: 'V', Coen: 'M', Bram: 'S', Abel: 'S' }, wissels: ['Noud', 'Izzy'] },
+        { posities: { Giulio: 'K', Noud: 'V', Izzy: 'V', Bastiaan: 'M', Bram: 'S', Coen: 'S' }, wissels: ['James', 'Abel'] },
+        { posities: { Giulio: 'K', James: 'V', Coen: 'V', Abel: 'M', Izzy: 'S', Noud: 'S' }, wissels: ['Bastiaan', 'Bram'] },
+      ],
+    };
+    const settings = { periods: 4, minutes: 50 };
+    let current = JSON.parse(localStorage.getItem('harness_match') || 'null') || match;
+    let empty = false;
+
+    function doMount() {
+      const m = empty ? Object.assign({}, current, { periodes: [] }) : current;
+      JO10.Live.mount(document.getElementById('live'), {
+        match: m,
+        settings,
+        onUpdate(patch) {
+          // Zoals app.js: patch { id, score, goals } in de actuele opgeslagen versie mergen.
+          console.log('onUpdate', JSON.stringify(patch));
+          current = Object.assign({}, current, patch, { updatedAt: Date.now() });
+          localStorage.setItem('harness_match', JSON.stringify(current));
+        },
+        onExit() { console.log('onExit'); JO10.Live.unmount(); document.getElementById('live').textContent = 'Exited — klik "Opnieuw mounten".'; },
+      });
+    }
+    // Hulpjes om de klok te verzetten (alleen harness): schuif startedAt terug.
+    function shift(ms) {
+      const key = JO10.Config.LS_LIVE;
+      const all = JSON.parse(localStorage.getItem(key) || '{}');
+      const s = all[current.id];
+      if (!s) return;
+      if (s.startedAt != null) s.startedAt -= ms; else s.accMs += ms;
+      localStorage.setItem(key, JSON.stringify(all));
+      doMount();
+    }
+    window.harness = { shift, doMount, match };
+    document.getElementById('bar').addEventListener('click', e => {
+      const h = e.target.getAttribute('data-h');
+      if (h === 'reset') { localStorage.removeItem(JO10.Config.LS_LIVE); localStorage.removeItem('harness_match'); current = match; doMount(); }
+      if (h === 'ff') shift(60000);
+      if (h === 'almost') {
+        const all = JSON.parse(localStorage.getItem(JO10.Config.LS_LIVE) || '{}');
+        const s = all[current.id];
+        const t = JO10.Live.timing(current, settings);
+        if (s) { const c = JO10.Live.computeClock(s, Date.now(), t); shift(c.remainingMs - 50000); }
+      }
+      if (h === 'empty') { empty = !empty; doMount(); }
+      if (h === 'mount') doMount();
+      if (h === 'remote') {
+        // Simuleer een assistent die op een ander toestel P2 aanpast (Noud ↔ Bram).
+        const periodes = JSON.parse(JSON.stringify(current.periodes));
+        const p2 = periodes[1];
+        delete p2.posities.Bram; p2.posities.Noud = 'S';
+        p2.wissels = p2.wissels.filter(n => n !== 'Noud').concat('Bram');
+        current = Object.assign({}, current, { periodes, updatedAt: Date.now() - 60000 });
+        localStorage.setItem('harness_match', JSON.stringify(current));
+        JO10.Live.update(current);
+      }
+    });
+    doMount();
+  </script>
+</body>
+</html>
