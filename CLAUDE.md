@@ -19,7 +19,7 @@ Primair gebruik: **telefoon langs de lijn** (iPhone Safari), soms desktop.
 | `js/io.js` | PNG-export, Excel import/export, WhatsApp-tekst | `JO10.IO` |
 | `js/live.js` + `css/live.css` | Live-wedstrijdmodus (klok, wissels, score) | `JO10.Live` |
 | `js/fixtures.js` | Speelkalender: iCal (.ics) ontleden, thuis/uit bepalen, koppelen aan wedstrijden | `JO10.Fixtures` |
-| `data/kalender.ics` | Officiële iCal van de clubsite, wekelijks (vrijdag 20:00) bijgewerkt door `.github/workflows/kalender.yml` | |
+| `data/kalender.ics` | Officiële iCal van de clubsite, dagelijks (20:00) bijgewerkt door `.github/workflows/kalender.yml` | |
 | `js/app.js` + `css/app.css` | UI-shell, schermen, state, rendering | `JO10.App` |
 | `test/*.test.js` | `node --test test/*.test.js` — unit tests voor scheduler/store/io-logica | |
 
@@ -135,7 +135,7 @@ Owner van de DOM-shell en navigatie. Schermen: `wedstrijd` (voorbereiden), `live
 
 ### Speelkalender
 Bron: `Config.CALENDAR_URL` (VoetbalAssist-iCal van team O10-3). Browsers mogen die niet direct ophalen (CORS), daarom
-downloadt een GitHub Action hem elke vrijdag om 20:00 naar `data/kalender.ics` (zelfde origin als de app). De app leest eerst dat
+downloadt een GitHub Action hem elke dag om 20:00 naar `data/kalender.ics` (zelfde origin als de app). De app leest eerst dat
 bestand, dan (reserve) de URL, en cachet de fixtures in localStorage `jo10_calendar_v2`. Handmatig een `.ics` importeren
 kan ook (Team → Speelkalender). Fixture: `{ id, datum, tijd, tegenstander, thuisUit, locatie, soort, verzamel, uid, score }`.
 Ons team wordt herkend aan "Sporting 70"/"Sporting '70"; de andere ploeg is de tegenstander (thuis = wij eerst genoemd).
