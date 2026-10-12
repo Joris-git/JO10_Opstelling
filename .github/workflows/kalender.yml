@@ -1,10 +1,14 @@
-# Haalt elke dag de officiële speelkalender (iCal) van de clubsite op en zet die in data/kalender.ics.
+# Haalt elke vrijdag om 20:00 (Nederlandse tijd) de officiële speelkalender (iCal) van de clubsite op
+# en zet die in data/kalender.ics. Handmatig starten kan altijd via Actions → "Run workflow".
 # De app leest dat bestand vanaf dezelfde site, dus zonder CORS-problemen.
 name: Speelkalender bijwerken
 
 on:
   schedule:
-    - cron: '17 4 * * *'   # dagelijks ±06:17 Nederlandse tijd
+    # GitHub rekent in UTC: 18:00 UTC = 20:00 zomertijd, 19:00 UTC = 20:00 wintertijd.
+    # De eerste stap laat alleen de run draaien die bij de huidige Nederlandse tijd hoort.
+    - cron: '0 18 * * 5'
+    - cron: '0 19 * * 5'
   workflow_dispatch:
 
 permissions:
@@ -16,9 +20,20 @@ jobs:
     env:
       ICAL_URL: https://sporting70.voetbalassist.nl/Modules/UitslagenEnStanden/Front/ICal.ashx?id=149
     steps:
+      - name: Alleen vrijdag 20:00 Nederlandse tijd
+        if: github.event_name == 'schedule'
+        run: |
+          OFFSET=$(TZ=Europe/Amsterdam date +%z)   # +0200 zomer, +0100 winter
+          if { [ "${{ github.event.schedule }}" = "0 18 * * 5" ] && [ "$OFFSET" != "+0200" ]; } || \
+             { [ "${{ github.event.schedule }}" = "0 19 * * 5" ] && [ "$OFFSET" != "+0100" ]; }; then
+            echo "SKIP=1" >> "$GITHUB_ENV"; echo "Niet het juiste uur voor de huidige tijdzone, overslaan."
+          fi
+
       - uses: actions/checkout@v4
+        if: env.SKIP != '1'
 
       - name: Kalender downloaden
+        if: env.SKIP != '1'
         run: |
           curl -fsSL --retry 3 --max-time 60 -A "JO10-Opstelling (GitHub Actions)" "$ICAL_URL" -o /tmp/kalender.ics
           if ! grep -q "BEGIN:VCALENDAR" /tmp/kalender.ics; then
@@ -33,7 +48,7 @@ jobs:
           echo "CHANGED=1" >> "$GITHUB_ENV"
 
       - name: Opslaan
-        if: env.CHANGED == '1'
+        if: env.SKIP != '1' && env.CHANGED == '1'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
