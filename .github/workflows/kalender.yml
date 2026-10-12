@@ -1,0 +1,42 @@
+# Haalt elke dag de officiële speelkalender (iCal) van de clubsite op en zet die in data/kalender.ics.
+# De app leest dat bestand vanaf dezelfde site, dus zonder CORS-problemen.
+name: Speelkalender bijwerken
+
+on:
+  schedule:
+    - cron: '17 4 * * *'   # dagelijks ±06:17 Nederlandse tijd
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  kalender:
+    runs-on: ubuntu-latest
+    env:
+      ICAL_URL: https://sporting70.voetbalassist.nl/Modules/UitslagenEnStanden/Front/ICal.ashx?id=149
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Kalender downloaden
+        run: |
+          curl -fsSL --retry 3 --max-time 60 -A "JO10-Opstelling (GitHub Actions)" "$ICAL_URL" -o /tmp/kalender.ics
+          if ! grep -q "BEGIN:VCALENDAR" /tmp/kalender.ics; then
+            echo "::error::Geen geldig iCal-bestand ontvangen"; head -c 500 /tmp/kalender.ics; exit 1
+          fi
+          # DTSTAMP verandert bij elke download; alleen echte wijzigingen committen
+          normalize() { tr -d '\r' < "$1" | grep -v '^DTSTAMP' ; }
+          if [ -f data/kalender.ics ] && [ "$(normalize data/kalender.ics)" = "$(normalize /tmp/kalender.ics)" ]; then
+            echo "Geen wijzigingen"; exit 0
+          fi
+          mkdir -p data && cp /tmp/kalender.ics data/kalender.ics
+          echo "CHANGED=1" >> "$GITHUB_ENV"
+
+      - name: Opslaan
+        if: env.CHANGED == '1'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/kalender.ics
+          git commit -m "Speelkalender bijgewerkt"
+          git push
