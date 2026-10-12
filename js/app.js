@@ -661,7 +661,7 @@
   // ═══════════════════════════════════════════════════════════════════
   const Cal = { fixtures: [], updatedAt: 0, source: '', loading: false, error: '' };
   const CAL_KEY = () => C().LS_CALENDAR || 'jo10_calendar_v2';
-  const CAL_SOURCE = { site: 'clubsite (wekelijks automatisch)', club: 'clubsite', file: 'eigen .ics-bestand' };
+  const CAL_SOURCE = { site: 'clubsite (dagelijks automatisch)', club: 'clubsite', file: 'eigen .ics-bestand' };
   function calLoadCache() {
     const c = lsJSON(CAL_KEY());
     if (c && Array.isArray(c.fixtures)) Object.assign(Cal, { fixtures: c.fixtures, updatedAt: +c.updatedAt || 0, source: c.source || '' });
@@ -1661,7 +1661,7 @@
         <button type="button" class="btn btn--ghost btn--block" data-act="cal-import">📥 .ics-bestand importeren</button>
         <input type="file" id="cal-file" accept=".ics,text/calendar" data-change="cal-file" hidden>
       </div>
-      <p class="hint">De officiële kalender van de clubsite wordt elke vrijdagavond automatisch opgehaald. Tegenstander, datum en thuis/uit neem je met één tik over bij ⚽ Wedstrijd.</p></div>`;
+      <p class="hint">De officiële kalender van de clubsite wordt elke avond automatisch opgehaald. Tegenstander, datum en thuis/uit neem je met één tik over bij ⚽ Wedstrijd.</p></div>`;
   }
   // ── Prullenbak (lokaal vangnet van de Store) ──
   const TRASH_REASON = { deleted: 'zelf verwijderd', delete: 'zelf verwijderd', user: 'zelf verwijderd', remote: 'verdwenen bij synchroniseren', sync: 'verdwenen bij synchroniseren', import: 'vervangen bij import' };
