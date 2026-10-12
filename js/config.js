@@ -67,6 +67,13 @@
     LS_DRAFT: 'jo10_draft_v2',
     LS_THEME: 'jo10_theme',
     LS_LIVE: 'jo10_live_v2',
+    LS_CALENDAR: 'jo10_calendar_v2',
+
+    // Speelkalender: officiële iCal van de clubsite. Een GitHub Action zet die dagelijks in CALENDAR_FILE
+    // (zelfde site als de app → geen CORS). CALENDAR_URL is de bron (en reserve voor direct ophalen).
+    CALENDAR_FILE: 'data/kalender.ics',
+    CALENDAR_URL: 'https://sporting70.voetbalassist.nl/Modules/UitslagenEnStanden/Front/ICal.ashx?id=149',
+    CALENDAR_TEAM: "Sporting '70 O10-3",
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = JO10.Config;

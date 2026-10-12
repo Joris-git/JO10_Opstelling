@@ -18,12 +18,14 @@ Primair gebruik: **telefoon langs de lijn** (iPhone Safari), soms desktop.
 | `js/store.js` | Opslag: localStorage-cache + Firebase realtime sync, selectie, concept | `JO10.Store` |
 | `js/io.js` | PNG-export, Excel import/export, WhatsApp-tekst | `JO10.IO` |
 | `js/live.js` + `css/live.css` | Live-wedstrijdmodus (klok, wissels, score) | `JO10.Live` |
+| `js/fixtures.js` | Speelkalender: iCal (.ics) ontleden, thuis/uit bepalen, koppelen aan wedstrijden | `JO10.Fixtures` |
+| `data/kalender.ics` | Officiële iCal van de clubsite, dagelijks bijgewerkt door `.github/workflows/kalender.yml` | |
 | `js/app.js` + `css/app.css` | UI-shell, schermen, state, rendering | `JO10.App` |
 | `test/*.test.js` | `node --test test/*.test.js` — unit tests voor scheduler/store/io-logica | |
 
 Elk JS-bestand is een IIFE: `(function(root){ const JO10 = root.JO10 = root.JO10 || {}; ... })(typeof window!=='undefined'?window:globalThis);`
 en exporteert via `module.exports` als `module` bestaat (voor Node-tests). Laadvolgorde in `index.html`:
-config → scheduler → store → io → live → app.
+config → scheduler → store → io → fixtures → live → app.
 
 ## Datamodel (compatibel met v1 — NIET breken)
 
@@ -130,6 +132,13 @@ scherm vergrendelen de klok niet reset (rekenen met `Date.now()`, niet met telle
 ### `JO10.App`
 Owner van de DOM-shell en navigatie. Schermen: `wedstrijd` (voorbereiden), `live`, `seizoen`, `team`.
 `App.go(screen, params)`; `App.toast(msg, type)`.
+
+### Speelkalender
+Bron: `Config.CALENDAR_URL` (VoetbalAssist-iCal van team O10-3). Browsers mogen die niet direct ophalen (CORS), daarom
+downloadt een GitHub Action hem dagelijks naar `data/kalender.ics` (zelfde origin als de app). De app leest eerst dat
+bestand, dan (reserve) de URL, en cachet de fixtures in localStorage `jo10_calendar_v2`. Handmatig een `.ics` importeren
+kan ook (Team → Speelkalender). Fixture: `{ id, datum, tijd, tegenstander, thuisUit, locatie, soort, verzamel, uid, score }`.
+Ons team wordt herkend aan "Sporting 70"/"Sporting '70"; de andere ploeg is de tegenstander (thuis = wij eerst genoemd).
 
 ## Regels voor het wisselschema (domein)
 - 6 tegen 6: Keeper, 2 Verdedigers, 1 Middenvelder, 2 Spitsen. 4 periodes van 12,5 min (instelbaar).
