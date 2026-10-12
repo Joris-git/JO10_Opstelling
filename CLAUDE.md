@@ -140,6 +140,13 @@ bestand, dan (reserve) de URL, en cachet de fixtures in localStorage `jo10_calen
 kan ook (Team → Speelkalender). Fixture: `{ id, datum, tijd, tegenstander, thuisUit, locatie, soort, verzamel, uid, score }`.
 Ons team wordt herkend aan "Sporting 70"/"Sporting '70"; de andere ploeg is de tegenstander (thuis = wij eerst genoemd).
 
+### Trainingen
+Alleen de woensdagtraining volgt de trainingsstof van de club (`Config.TRAINING`): eerste woensdag van het seizoen
+(`seasonStart`) = week 1, elke volgende woensdag +1, woensdagen in schoolvakanties (regio Midden, `holidays`) tellen niet
+mee. `Fixtures.trainingWeeks()` rekent dit uit; tijden/veld komen uit de trainingen in `data/kalender.ics`. Inhoud per week
+kan in `data/trainingen.json` (`{ "weken": { "7": { "titel", "thema", "link" } } }`); zonder dat bestand linkt de app naar
+de trainingenpagina van de club. Elk seizoen `seasonStart` en `holidays` bijwerken.
+
 ## Regels voor het wisselschema (domein)
 - 6 tegen 6: Keeper, 2 Verdedigers, 1 Middenvelder, 2 Spitsen. 4 periodes van 12,5 min (instelbaar).
 - Aantal wissels per periode = aanwezig − 6 (0 t/m 4).

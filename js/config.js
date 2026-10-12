@@ -74,6 +74,22 @@
     CALENDAR_FILE: 'data/kalender.ics',
     CALENDAR_URL: 'https://sporting70.voetbalassist.nl/Modules/UitslagenEnStanden/Front/ICal.ashx?id=149',
     CALENDAR_TEAM: "Sporting '70 O10-3",
+
+    // Trainingsstof van de club (JO10–JO12). Alleen de woensdagtraining volgt de reeks:
+    // eerste woensdag van het seizoen = week 1; woensdagen in schoolvakanties (regio Midden) tellen niet mee.
+    TRAINING: {
+      weekday: 3,                 // woensdag
+      seasonStart: '2026-09-02',  // eerste woensdag na de zomervakantie (regio Midden: t/m 30 aug 2026)
+      materialUrl: 'https://sporting70.voetbalassist.nl/569/trainingen/',
+      materialFile: 'data/trainingen.json',   // optioneel: { "weken": { "1": { "titel", "thema", "link" } } }
+      holidays: [                 // schoolvakanties 2026-2027 regio Midden (rijksoverheid.nl)
+        { naam: 'Herfstvakantie',    van: '2026-10-17', tot: '2026-10-25' },
+        { naam: 'Kerstvakantie',     van: '2026-12-19', tot: '2027-01-03' },
+        { naam: 'Voorjaarsvakantie', van: '2027-02-20', tot: '2027-02-28' },
+        { naam: 'Meivakantie',       van: '2027-04-24', tot: '2027-05-02' },
+        { naam: 'Zomervakantie',     van: '2027-07-17', tot: '2027-08-29' },
+      ],
+    },
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = JO10.Config;

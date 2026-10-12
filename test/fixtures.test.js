@@ -67,3 +67,27 @@ test('upcoming/next/matchFor/shortName', () => {
   assert.strictEqual(F.shortName('Sporting 70 JO10-3JM'), 'Sporting 70');
   assert.strictEqual(F.shortName('FC Stein'), 'FC Stein');
 });
+
+const CFG = require('../js/config.js');
+
+test('training weeks: Wednesdays from season start, holidays skipped', () => {
+  const T = CFG.TRAINING;
+  const list = F.trainingWeeks({ start: T.seasonStart, weekday: T.weekday, holidays: T.holidays, until: '2027-01-13' });
+  const at = d => list.find(x => x.datum === d);
+  assert.deepStrictEqual(at('2026-09-02'), { datum: '2026-09-02', week: 1, vakantie: null });
+  assert.strictEqual(at('2026-10-14').week, 7);
+  assert.deepStrictEqual(at('2026-10-21'), { datum: '2026-10-21', week: null, vakantie: 'Herfstvakantie' });
+  assert.strictEqual(at('2026-10-28').week, 8);
+  assert.strictEqual(at('2026-12-23').vakantie, 'Kerstvakantie');
+  assert.strictEqual(at('2026-12-30').vakantie, 'Kerstvakantie');
+  assert.strictEqual(at('2026-12-16').week, 15);
+  assert.strictEqual(at('2027-01-06').week, 16);
+  assert.ok(list.every(x => new Date(x.datum + 'T12:00').getDay() === 3));
+  assert.strictEqual(F.trainingWeekOf('2026-11-04', { start: T.seasonStart, weekday: 3, holidays: T.holidays }).week, 9);
+  assert.strictEqual(F.trainingWeekOf('2026-11-05', { start: T.seasonStart, weekday: 3, holidays: T.holidays }), null);
+});
+
+test('parseTrainings reads time, end and field', () => {
+  const ics = 'BEGIN:VCALENDAR\nBEGIN:VEVENT\nCATEGORIES:Training\nDESCRIPTION:veld: B2\\, Kleedkamer:\nDTSTART;TZID=Europe/Amsterdam:20261014T160000\nDTEND;TZID=Europe/Amsterdam:20261014T170000\nSUMMARY:Training O10-3\nEND:VEVENT\nEND:VCALENDAR';
+  assert.deepStrictEqual(F.parseTrainings(ics), [{ datum: '2026-10-14', tijd: '16:00', eind: '17:00', veld: 'B2' }]);
+});

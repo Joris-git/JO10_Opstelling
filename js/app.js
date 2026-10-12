@@ -659,19 +659,21 @@
   // ═══════════════════════════════════════════════════════════════════
   // Speelkalender (officiële iCal, via data/kalender.ics)
   // ═══════════════════════════════════════════════════════════════════
-  const Cal = { fixtures: [], updatedAt: 0, source: '', loading: false, error: '' };
+  const Cal = { fixtures: [], trainings: [], material: {}, updatedAt: 0, source: '', loading: false, error: '' };
   const CAL_KEY = () => C().LS_CALENDAR || 'jo10_calendar_v2';
   const CAL_SOURCE = { site: 'clubsite (dagelijks automatisch)', club: 'clubsite', file: 'eigen .ics-bestand' };
   function calLoadCache() {
     const c = lsJSON(CAL_KEY());
-    if (c && Array.isArray(c.fixtures)) Object.assign(Cal, { fixtures: c.fixtures, updatedAt: +c.updatedAt || 0, source: c.source || '' });
+    if (c && Array.isArray(c.fixtures)) Object.assign(Cal, { fixtures: c.fixtures, trainings: Array.isArray(c.trainings) ? c.trainings : [], updatedAt: +c.updatedAt || 0, source: c.source || '' });
   }
   function calApply(text, source) {
     const F = JO10.Fixtures;
     const r = F.parseICS(text, { team: C().CALENDAR_TEAM });
-    if (r.fixtures.length) {
-      Object.assign(Cal, { fixtures: r.fixtures, updatedAt: Date.now(), source, error: '' });
-      lsSet(CAL_KEY(), JSON.stringify({ fixtures: Cal.fixtures, updatedAt: Cal.updatedAt, source }));
+    r.trainings = typeof F.parseTrainings === 'function' ? F.parseTrainings(text) : [];
+    r.ok = r.fixtures.length > 0 || r.trainings.length > 0;
+    if (r.ok) {
+      Object.assign(Cal, { fixtures: r.fixtures, trainings: r.trainings, updatedAt: Date.now(), source, error: '' });
+      lsSet(CAL_KEY(), JSON.stringify({ fixtures: Cal.fixtures, trainings: Cal.trainings, updatedAt: Cal.updatedAt, source }));
     }
     return r;
   }
@@ -687,12 +689,12 @@
         const res = await root.fetch(url, { cache: 'no-cache' });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const rr = calApply(await res.text(), src);
-        if (rr.fixtures.length) { r = rr; break; }
+        if (rr.ok) { r = rr; break; }
         err = rr.warnings[0] || 'Geen wedstrijden gevonden';
       } catch (e) { err = e && e.message || String(e); }
     }
     Cal.loading = false; Cal.error = r ? '' : err;
-    if (manual) toast(r ? `📅 Kalender bijgewerkt: ${r.fixtures.length} wedstrijden` : 'Kalender ophalen lukte niet. Importeer het .ics-bestand, of probeer het later nog eens.', r ? 'success' : 'warn', { ms: 4000 });
+    if (manual) toast(r ? `📅 Kalender bijgewerkt: ${r.fixtures.length} wedstrijden, ${r.trainings.length} trainingen` : 'Kalender ophalen lukte niet. Importeer het .ics-bestand, of probeer het later nog eens.', r ? 'success' : 'warn', { ms: 4000 });
     if (r || manual) calRerender();
   }
   function calRerender() {
@@ -700,6 +702,55 @@
     if (S.screen === 'wedstrijd') { if (!isTyping()) renderInfo(); }
     else if (S.screen === 'seizoen') renderSeizoen();
     else if (S.screen === 'team') { if (!isTyping()) renderTeam(); }
+  }
+  // Trainingsstof per week (optioneel bestand; ontbreekt het, dan linken we naar de clubpagina)
+  async function loadMaterial() {
+    const T = C().TRAINING || {};
+    if (!T.materialFile || typeof root.fetch !== 'function') return;
+    try {
+      const res = await root.fetch(T.materialFile, { cache: 'no-cache' });
+      if (!res.ok) return;
+      const j = await res.json();
+      if (j && typeof j.weken === 'object') { Cal.material = j.weken; calRerender(); }
+    } catch (e) { /* geen materiaalbestand: prima */ }
+  }
+  function trainingOpts() {
+    const T = C().TRAINING || {};
+    return { start: T.seasonStart, weekday: T.weekday == null ? 3 : T.weekday, holidays: T.holidays || [] };
+  }
+  // Komende reeks-trainingen (woensdag): week, vakantie, tijd/veld uit de kalender, stof
+  function upcomingTrainings(n) {
+    if (!modFn('Fixtures', 'trainingWeeks')) return [];
+    const today = todayISO();
+    const until = isoOf(new Date(Date.now() + 1000 * 60 * 60 * 24 * 7 * (n + 8)));
+    return fxFn('trainingWeeks', [Object.assign(trainingOpts(), { until })], [])
+      .filter(w => w.datum >= today).slice(0, n)
+      .map(w => {
+        const t = Cal.trainings.find(x => x.datum === w.datum) || null;
+        const mat = w.week != null ? (Cal.material[String(w.week)] || null) : null;
+        return Object.assign({}, w, { t, mat });
+      });
+  }
+  function trainingRowHTML(w, first) {
+    const d = parseISO(w.datum);
+    const T = C().TRAINING || {};
+    const when = `${fmtDate(w.datum, { weekday: 'short' })}${w.t ? ` ${w.t.tijd}${w.t.eind ? '–' + w.t.eind : ''}` : ''}${w.t && w.t.veld ? ` · veld ${w.t.veld}` : ''}`;
+    const title = w.vakantie ? `🏖️ ${w.vakantie}` : `Week ${w.week}${w.mat && w.mat.titel ? ` · ${w.mat.titel}` : ''}`;
+    const sub = w.vakantie ? 'telt niet mee in de reeks' : [when, w.mat && w.mat.thema].filter(Boolean).join(' · ');
+    const link = !w.vakantie ? ((w.mat && w.mat.link) || T.materialUrl) : '';
+    const inner = `<span class="mrow__date" aria-hidden="true"><b>${d ? d.getDate() : '?'}</b><small>${d ? esc(d.toLocaleDateString('nl-NL', { month: 'short' })) : ''}</small></span>
+      <span class="mrow__main"><span class="mrow__opp">${esc(title)}</span><span class="mrow__meta">${esc(sub)}</span></span>
+      ${link ? `<span class="fx-tag">${first ? 'Trainingsstof ›' : '›'}</span>` : ''}`;
+    return link ? `<a class="mrow${w.vakantie ? ' is-off' : ''}" href="${esc(link)}" target="_blank" rel="noopener">${inner}</a>`
+      : `<div class="mrow is-off">${inner}</div>`;
+  }
+  function trainingenHTML() {
+    const list = upcomingTrainings(S.trAll ? 12 : 4);
+    if (!list.length) return '';
+    return `<div class="card"><h2 class="card__title">🏃 Trainingen</h2>
+      <div class="mlist">${list.map((w, i) => trainingRowHTML(w, i === 0)).join('')}</div>
+      <button type="button" class="link-btn fx-more" data-act="tr-all">${S.trAll ? 'Minder tonen' : 'Meer weken'}</button>
+      <p class="hint">Woensdagtraining volgens de trainingsstof van de club (week 1 = ${esc(fmtDate((C().TRAINING || {}).seasonStart || '', { day: 'numeric', month: 'long' }))}). Schoolvakanties (regio Midden) tellen niet mee.</p></div>`;
   }
   async function onCalendarFile(input) {
     const file = input.files && input.files[0];
@@ -709,7 +760,7 @@
     let text = '';
     try { text = await file.text(); } catch (e) { reportError(e, 'Dit bestand kon niet gelezen worden.'); return; }
     const r = calApply(text, 'file');
-    if (r.fixtures.length) toast(`📅 ${r.fixtures.length} wedstrijden uit ${file.name} ingelezen`, 'success');
+    if (r.ok) toast(`📅 ${r.fixtures.length} wedstrijden en ${r.trainings.length} trainingen uit ${file.name} ingelezen`, 'success');
     else toast(r.warnings[0] || 'Geen wedstrijden gevonden in dit bestand.', 'warn');
     renderTeam();
   }
@@ -1467,6 +1518,7 @@
         <div class="stat"><span class="stat__num stat__num--rec"><span class="c-W">${rec.W}</span>-<span class="c-G">${rec.G}</span>-<span class="c-V">${rec.V}</span></span><span class="stat__label">W-G-V</span></div>
         <div class="stat"><span class="stat__num">${gf}<small>–</small>${ga}</span><span class="stat__label">doelpunten</span></div>
       </div>
+      ${trainingenHTML()}
       ${programmaHTML(ms)}
       <div class="card"><h2 class="card__title">Speeltijd & posities</h2>
         ${ms.length ? `<div class="table-wrap"><table class="st"><thead><tr>${th}</tr></thead><tbody>${tb}</tbody></table></div>
@@ -1481,7 +1533,7 @@
     if (!JO10.Fixtures) return '';
     if (!Cal.fixtures.length) {
       return `<div class="card"><h2 class="card__title">📅 Programma</h2>
-        <p class="hint">${Cal.loading ? 'Kalender laden…' : 'De speelkalender is nog niet geladen.'}</p>
+        <p class="hint">${Cal.loading ? 'Kalender laden…' : Cal.trainings.length ? 'Er staan nog geen wedstrijden in de clubkalender. Zodra de club ze toevoegt, verschijnen ze hier vanzelf.' : 'De speelkalender is nog niet geladen.'}</p>
         <button type="button" class="btn btn--secondary btn--sm" data-act="cal-refresh">🔄 Kalender ophalen</button></div>`;
     }
     const up = fxFn('upcoming', [Cal.fixtures], []);
@@ -1654,8 +1706,8 @@
     const n = Cal.fixtures.length;
     const when = Cal.updatedAt ? new Date(Cal.updatedAt).toLocaleString('nl-NL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
     return `<div class="card"><h2 class="card__title">📅 Speelkalender</h2>
-      <p class="hint">${esc(C().CALENDAR_TEAM || '')}${n ? ` · <b>${n} wedstrijden</b> · bijgewerkt ${esc(when)} · ${esc(CAL_SOURCE[Cal.source] || '')}` : ` · ${Cal.loading ? 'laden…' : 'nog niet geladen'}`}</p>
-      ${Cal.error && !n ? `<p class="note note--warn">Ophalen lukte niet (${esc(Cal.error)}).</p>` : ''}
+      <p class="hint">${esc(C().CALENDAR_TEAM || '')}${n || Cal.trainings.length ? ` · <b>${n} wedstrijden</b>, ${Cal.trainings.length} trainingen · bijgewerkt ${esc(when)} · ${esc(CAL_SOURCE[Cal.source] || '')}` : ` · ${Cal.loading ? 'laden…' : 'nog niet geladen'}`}</p>
+      ${Cal.error && !n && !Cal.trainings.length ? `<p class="note note--warn">Ophalen lukte niet (${esc(Cal.error)}).</p>` : ''}
       <div class="btn-col">
         <button type="button" class="btn btn--secondary btn--block" data-act="cal-refresh"${Cal.loading ? ' disabled' : ''}>🔄 Kalender vernieuwen</button>
         <button type="button" class="btn btn--ghost btn--block" data-act="cal-import">📥 .ics-bestand importeren</button>
@@ -1905,6 +1957,7 @@
     'fx-use': ds => { const f = fxById(ds.id); if (!f) return; fxApplyToDraft(S.draft, f); changed(); renderInfo(); renderActions(); renderProgress(); toast(`${fxShort(f)} overgenomen`, 'success', { ms: 1600 }); },
     'fx-plan': ds => fxPlan(ds.id),
     'fx-all': () => { S.fxAll = !S.fxAll; renderSeizoen(); },
+    'tr-all': () => { S.trAll = !S.trAll; renderSeizoen(); },
     'cal-refresh': () => calRefresh(true),
     'cal-import': () => { const i = doc.getElementById('cal-file'); if (i) i.click(); },
     'sheet-close': () => closeSheet(false),
@@ -2034,7 +2087,7 @@
     go(start);
     root.scrollTo(0, 0);
     // Speelkalender op de achtergrond verversen (cache is al direct zichtbaar)
-    setTimeout(() => { calRefresh(false).catch(e => console.warn('[JO10] kalender', e)); }, 400);
+    setTimeout(() => { calRefresh(false).catch(e => console.warn('[JO10] kalender', e)); loadMaterial(); }, 400);
   }
 
   JO10.App = {
