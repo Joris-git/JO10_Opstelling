@@ -190,7 +190,63 @@
     return s || String(name || '').trim();
   }
 
-  const api = { parseICS, parseEvents, splitTeams, parseDateValue, upcoming, past, next, onDate, matchFor, shortName };
+  // ── Trainingen ───────────────────────────────────────────────────────────
+  // Trainingen uit dezelfde iCal: { datum, tijd, eind, veld }
+  function parseTrainings(text, opts) {
+    opts = opts || {};
+    const out = [];
+    parseEvents(text).forEach(ev => {
+      const summary = unescapeText(ev.SUMMARY && ev.SUMMARY.value);
+      const cat = unescapeText(ev.CATEGORIES && ev.CATEGORIES.value);
+      if (!/training/i.test(cat + ' ' + summary)) return;
+      if (ev.STATUS && /CANCELLED/i.test(ev.STATUS.value)) return;
+      const start = ev.DTSTART && parseDateValue(ev.DTSTART.value, ev.DTSTART.params, opts.timeZone);
+      const end = ev.DTEND && parseDateValue(ev.DTEND.value, ev.DTEND.params, opts.timeZone);
+      if (!start) return;
+      const desc = unescapeText(ev.DESCRIPTION && ev.DESCRIPTION.value);
+      const veld = /veld:\s*([^,\n]+)/i.exec(desc);
+      out.push({ datum: start.datum, tijd: start.tijd, eind: end ? end.tijd : '', veld: veld ? veld[1].trim() : '' });
+    });
+    out.sort((a, b) => (a.datum + a.tijd).localeCompare(b.datum + b.tijd));
+    return out;
+  }
+
+  function addDays(iso, n) {
+    const [y, m, d] = iso.split('-').map(Number);
+    const dt = new Date(y, m - 1, d + n);
+    return isoDate(dt);
+  }
+  function holidayOn(datum, holidays) {
+    return (holidays || []).find(h => h && datum >= h.van && datum <= h.tot) || null;
+  }
+  // Genummerde trainingsweken: elke `weekday` (0=zo … 3=wo) vanaf `start` is week 1, 2, 3 …;
+  // weken in een vakantie krijgen geen nummer en tellen niet mee.
+  // → [{ datum, week: n|null, vakantie: naam|null }] van start t/m `until`
+  function trainingWeeks(o) {
+    o = o || {};
+    const start = o.start; if (!/^\d{4}-\d{2}-\d{2}$/.test(start || '')) return [];
+    const wd = o.weekday == null ? 3 : +o.weekday;
+    let d = start;
+    const [y, m, dd] = start.split('-').map(Number);
+    const shift = (wd - new Date(y, m - 1, dd).getDay() + 7) % 7;
+    d = addDays(d, shift);
+    const until = o.until || addDays(d, 7 * 52);
+    const out = []; let n = 0;
+    while (d <= until && out.length < 60) {
+      const h = holidayOn(d, o.holidays);
+      if (h) out.push({ datum: d, week: null, vakantie: h.naam || 'vakantie' });
+      else out.push({ datum: d, week: ++n, vakantie: null });
+      d = addDays(d, 7);
+    }
+    return out;
+  }
+  function trainingWeekOf(datum, o) {
+    const list = trainingWeeks(Object.assign({}, o, { until: datum }));
+    const hit = list.find(x => x.datum === datum);
+    return hit || null;
+  }
+
+  const api = { parseTrainings, trainingWeeks, trainingWeekOf, parseICS, parseEvents, splitTeams, parseDateValue, upcoming, past, next, onDate, matchFor, shortName };
   JO10.Fixtures = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);
