@@ -157,7 +157,7 @@
     fixtures.sort((a, b) => (a.datum + a.tijd).localeCompare(b.datum + b.tijd));
     // dubbele (zelfde dag + tegenstander) samenvoegen
     const seen = new Set(); const out = [];
-    fixtures.forEach(f => { const k = `${f.datum}|${norm(f.tegenstander)}`; if (seen.has(k)) return; seen.add(k); out.push(f); });
+    fixtures.forEach(f => { const k = `${f.datum}|${norm(shortName(f.tegenstander))}`; if (seen.has(k)) return; seen.add(k); out.push(f); });
     if (events.length && !out.length) warnings.push('Geen wedstrijden met een tegenstander gevonden in de kalender.');
     return { fixtures: out, warnings, events: events.length };
   }

@@ -683,14 +683,19 @@
     if (!manual && Cal.source === 'file' && Cal.fixtures.length) return;
     Cal.loading = true;
     let r = null, err = '';
-    const tries = [[C().CALENDAR_FILE, 'site'], [C().CALENDAR_URL, 'club']].filter(t => t[0]);
-    for (const [url, src] of tries) {
+    // 1) Eigen site: trainingen + wedstrijden samen inlezen (ontbrekend bestand is geen fout)
+    const files = C().CALENDAR_FILES || [C().CALENDAR_FILE];
+    const texts = await Promise.all(files.filter(Boolean).map(f => root.fetch(f, { cache: 'no-cache' })
+      .then(res => (res.ok ? res.text() : '')).catch(e => { err = e && e.message || String(e); return ''; })));
+    const joined = texts.filter(t => /BEGIN:VCALENDAR/i.test(t)).join('\n');
+    if (joined) { const rr = calApply(joined, 'site'); if (rr.ok) r = rr; else err = rr.warnings[0] || 'Geen wedstrijden gevonden'; }
+    // 2) Reserve: direct bij de clubsite (lukt meestal niet door CORS)
+    if (!r && C().CALENDAR_URL) {
       try {
-        const res = await root.fetch(url, { cache: 'no-cache' });
+        const res = await root.fetch(C().CALENDAR_URL, { cache: 'no-cache' });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const rr = calApply(await res.text(), src);
-        if (rr.ok) { r = rr; break; }
-        err = rr.warnings[0] || 'Geen wedstrijden gevonden';
+        const rr = calApply(await res.text(), 'club');
+        if (rr.ok) r = rr; else err = rr.warnings[0] || 'Geen wedstrijden gevonden';
       } catch (e) { err = e && e.message || String(e); }
     }
     Cal.loading = false; Cal.error = r ? '' : err;

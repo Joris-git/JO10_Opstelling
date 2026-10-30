@@ -1,5 +1,5 @@
-# Haalt elke dag om 20:00 (Nederlandse tijd) de officiële speelkalender (iCal) van de clubsite op
-# en zet die in data/kalender.ics. Handmatig starten kan altijd via Actions → "Run workflow".
+# Haalt elke dag om 20:00 (Nederlandse tijd) de kalenders op: trainingen van de clubsite → data/kalender.ics,
+# wedstrijden uit Sportlink (geheim SPORTLINK_ICAL_URL, gefilterd op O10-3) → data/wedstrijden.ics. Handmatig starten kan altijd via Actions → "Run workflow".
 # De app leest dat bestand vanaf dezelfde site, dus zonder CORS-problemen.
 name: Speelkalender bijwerken
 
@@ -32,26 +32,50 @@ jobs:
       - uses: actions/checkout@v4
         if: env.SKIP != '1'
 
-      - name: Kalender downloaden
+      - name: Trainingen downloaden (clubsite)
         if: env.SKIP != '1'
         run: |
           curl -fsSL --retry 3 --max-time 60 -A "JO10-Opstelling (GitHub Actions)" "$ICAL_URL" -o /tmp/kalender.ics
           if ! grep -q "BEGIN:VCALENDAR" /tmp/kalender.ics; then
-            echo "::error::Geen geldig iCal-bestand ontvangen"; head -c 500 /tmp/kalender.ics; exit 1
-          fi
-          # DTSTAMP verandert bij elke download; alleen echte wijzigingen committen
-          normalize() { tr -d '\r' < "$1" | grep -v '^DTSTAMP' ; }
-          if [ -f data/kalender.ics ] && [ "$(normalize data/kalender.ics)" = "$(normalize /tmp/kalender.ics)" ]; then
-            echo "Geen wijzigingen"; exit 0
+            echo "::error::Geen geldig iCal-bestand ontvangen (clubsite)"; head -c 500 /tmp/kalender.ics; exit 1
           fi
           mkdir -p data && cp /tmp/kalender.ics data/kalender.ics
-          echo "CHANGED=1" >> "$GITHUB_ENV"
 
-      - name: Opslaan
-        if: env.SKIP != '1' && env.CHANGED == '1'
+      - name: Wedstrijden downloaden (Sportlink)
+        if: env.SKIP != '1'
+        env:
+          # Persoonlijke Sportlink-link (webcal://… mag ook); staat als geheim in de repository-instellingen.
+          SPORTLINK_ICAL_URL: ${{ secrets.SPORTLINK_ICAL_URL }}
         run: |
+          if [ -z "$SPORTLINK_ICAL_URL" ]; then
+            echo "::warning::Geheim SPORTLINK_ICAL_URL ontbreekt; wedstrijden worden overgeslagen."; exit 0
+          fi
+          URL="${SPORTLINK_ICAL_URL/#webcal:\/\//https://}"
+          echo "::add-mask::$URL"
+          curl -fsSL --retry 3 --max-time 60 -A "JO10-Opstelling (GitHub Actions)" "$URL" -o /tmp/sportlink.ics
+          if ! grep -q "BEGIN:VCALENDAR" /tmp/sportlink.ics; then
+            echo "::error::Geen geldig iCal-bestand ontvangen (Sportlink)"; exit 1
+          fi
+          # Alleen O10-3-wedstrijden en niets persoonlijks naar de openbare repository
+          python3 -I scripts/filter_ics.py /tmp/sportlink.ics data/wedstrijden.ics
+
+      - name: Opslaan (alleen bij echte wijzigingen)
+        if: env.SKIP != '1'
+        run: |
+          # DTSTAMP verandert bij elke download; die regels tellen niet mee
+          norm() { tr -d '\r' | grep -v '^DTSTAMP' || true; }
+          CHANGED=0
+          for f in data/kalender.ics data/wedstrijden.ics; do
+            [ -f "$f" ] || continue
+            if git cat-file -e "HEAD:$f" 2>/dev/null; then
+              if [ "$(git show "HEAD:$f" | norm)" != "$(norm < "$f")" ]; then CHANGED=1; else git checkout -- "$f"; fi
+            else
+              CHANGED=1
+            fi
+          done
+          if [ "$CHANGED" = 0 ]; then echo "Geen wijzigingen"; exit 0; fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/kalender.ics
+          git add data/*.ics
           git commit -m "Speelkalender bijgewerkt"
           git push
