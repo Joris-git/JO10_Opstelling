@@ -683,7 +683,7 @@
     if (!manual && Cal.source === 'file' && Cal.fixtures.length) return;
     Cal.loading = true;
     let r = null, err = '';
-    // 1) Eigen site: trainingen + wedstrijden samen inlezen (ontbrekend bestand is geen fout)
+    // 1) Eigen site (data/kalender.ics, dagelijks bijgewerkt door GitHub)
     const files = C().CALENDAR_FILES || [C().CALENDAR_FILE];
     const texts = await Promise.all(files.filter(Boolean).map(f => root.fetch(f, { cache: 'no-cache' })
       .then(res => (res.ok ? res.text() : '')).catch(e => { err = e && e.message || String(e); return ''; })));
