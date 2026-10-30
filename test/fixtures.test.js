@@ -91,3 +91,24 @@ test('parseTrainings reads time, end and field', () => {
   const ics = 'BEGIN:VCALENDAR\nBEGIN:VEVENT\nCATEGORIES:Training\nDESCRIPTION:veld: B2\\, Kleedkamer:\nDTSTART;TZID=Europe/Amsterdam:20261014T160000\nDTEND;TZID=Europe/Amsterdam:20261014T170000\nSUMMARY:Training O10-3\nEND:VEVENT\nEND:VCALENDAR';
   assert.deepStrictEqual(F.parseTrainings(ics), [{ datum: '2026-10-14', tijd: '16:00', eind: '17:00', veld: 'B2' }]);
 });
+
+test('real VoetbalAssist format: "X tegen Sporting 70 O10-3JM" with categories', () => {
+  const ics = ['BEGIN:VCALENDAR',
+    'BEGIN:VEVENT', 'CATEGORIES:Wedstrijdprogramma van Sporting 70 O10-3JM', 'DTSTART;TZID=Europe/Amsterdam:20261031T093500',
+    'LOCATION:Sportpark Marco van Basten\\, Kanaalweg 174', 'SUMMARY:PVC O10-3 tegen Sporting 70 O10-3JM', 'END:VEVENT',
+    'BEGIN:VEVENT', 'CATEGORIES:Wedstrijdprogramma van Sporting 70 O10-3JM', 'DTSTART;TZID=Europe/Amsterdam:20261121T094500',
+    'SUMMARY:Sporting 70 O10-3JM tegen Maarssen O10-7JM', 'END:VEVENT',
+    'BEGIN:VEVENT', 'CATEGORIES:Training', 'DTSTART;TZID=Europe/Amsterdam:20261104T160000', 'SUMMARY:Training O10-3', 'END:VEVENT',
+    'END:VCALENDAR'].join('\r\n');
+  const { fixtures } = F.parseICS(ics);
+  assert.deepStrictEqual(fixtures.map(f => [f.datum, f.tijd, f.thuisUit, F.shortName(f.tegenstander)]),
+    [['2026-10-31', '09:35', 'uit', 'PVC'], ['2026-11-21', '09:45', 'thuis', 'Maarssen']]);
+  assert.strictEqual(fixtures[0].locatie, 'Sportpark Marco van Basten, Kanaalweg 174');
+  assert.strictEqual(F.parseTrainings(ics).length, 1);
+});
+
+test('same match from two feeds (JO10-2 vs O10-2 naming) is not duplicated', () => {
+  const ev = s => `BEGIN:VEVENT\nDTSTART;TZID=Europe/Amsterdam:20261107T090000\nSUMMARY:${s}\nEND:VEVENT`;
+  const ics = `BEGIN:VCALENDAR\n${ev("Sporting 70 O10-3JM tegen DOS O10-2")}\nEND:VCALENDAR\nBEGIN:VCALENDAR\n${ev("Sporting '70 JO10-3 - DOS JO10-2")}\nEND:VCALENDAR`;
+  assert.strictEqual(F.parseICS(ics).fixtures.length, 1);
+});

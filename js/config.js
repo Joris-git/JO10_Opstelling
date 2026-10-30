@@ -71,7 +71,8 @@
 
     // Speelkalender: officiële iCal van de clubsite. Een GitHub Action zet die dagelijks in CALENDAR_FILE
     // (zelfde site als de app → geen CORS). CALENDAR_URL is de bron (en reserve voor direct ophalen).
-    CALENDAR_FILE: 'data/kalender.ics',
+    CALENDAR_FILE: 'data/kalender.ics',            // trainingen (clubsite)
+    CALENDAR_FILES: ['data/kalender.ics', 'data/wedstrijden.ics'],  // + wedstrijden (Sportlink, gefilterd op O10-3)
     CALENDAR_URL: 'https://sporting70.voetbalassist.nl/Modules/UitslagenEnStanden/Front/ICal.ashx?id=149',
     CALENDAR_TEAM: "Sporting '70 O10-3",
 
