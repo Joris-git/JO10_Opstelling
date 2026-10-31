@@ -1,4 +1,4 @@
-// JO10 Opstelling — live-wedstrijdmodus: klok per periode, wissels, score.
+// JO10 Opstelling — live-wedstrijdmodus: klok per periode, wissels, score. Werkt voor elke formatie (2-1-2, 2-2-1, …).
 // Pure tijd-/wissel-/scorelogica is geëxporteerd voor Node-tests; de DOM-laag draait alleen in de browser.
 (function (root) {
   'use strict';
@@ -50,6 +50,25 @@
     const subs = (p && (Array.isArray(p.wissels) ? p.wissels : Array.isArray(p.subs) ? p.subs : [])) || [];
     subs.forEach(n => { if (n && !posities[n] && wissels.indexOf(n) < 0) wissels.push(n); });
     return { posities, wissels };
+  }
+
+  /** Rijen van het veldje, van boven (aanval) naar onder (keeper): { S: [naam], M: [...], V: [...], K: [...] }.
+   *  Aantallen volgen de opstelling zelf, dus elke formatie (2-1-2: M 1 / S 2, 2-2-1: M 2 / S 1). */
+  function pitchRows(period) {
+    const rows = { S: [], M: [], V: [], K: [] };
+    lineupOf(period).forEach(p => rows[p.code].push(p.name));
+    return rows;
+  }
+
+  /** Formatie van de wedstrijd als { K, V, M, S } (match.formatie → format.formation → afgeleid). */
+  function formationOf(match) {
+    const C = cfg();
+    if (typeof C.matchFormation === 'function') return C.matchFormation(match);
+    return { K: 1, V: 2, M: 1, S: 2 };
+  }
+  function formationLabel(match) {
+    const f = formationOf(match);
+    return `${f.V}-${f.M}-${f.S}`;
   }
 
   /** Spelers op het veld gesorteerd K, V, M, S (stabiel op invoervolgorde). */
@@ -698,13 +717,13 @@
 
   function renderPitch(c) {
     const period = normalizePeriod(periodAt(c.period));
-    const rows = { S: [], M: [], V: [], K: [] };
-    lineupOf(period).forEach(p => rows[p.code].push(p.name));
-    const chip = (name, code) => `<span class="live-chip" style="--pos:${posInfo(code).color}"><b aria-hidden="true">${code}</b>${esc(name)}</span>`;
+    const rows = pitchRows(period);
+    const chip = (name, code) => `<span class="live-chip" style="--pos:${posInfo(code).color}" title="${esc(name)} (${esc(posLabel(code))})"><b aria-hidden="true">${code}</b><span class="live-chip-name">${esc(name)}</span></span>`;
     const rowHtml = code => rows[code].length
-      ? `<div class="live-row live-row-${code}" aria-label="${esc(posLabel(code))}">${rows[code].map(n => chip(n, code)).join('')}</div>` : '';
+      ? `<div class="live-row live-row-${code}" aria-label="${esc(posLabel(code))}" style="--n:${rows[code].length}">${rows[code].map(n => chip(n, code)).join('')}</div>` : '';
     return '<section class="live-card live-pitch-card" aria-label="Opstelling">' +
-      `<h2 class="live-h2">Opstelling P${c.periodNumber}${c.phase === 'ready' && c.period > 0 ? ' (na de wissel)' : ''}</h2>` +
+      `<h2 class="live-h2">Opstelling P${c.periodNumber}${c.phase === 'ready' && c.period > 0 ? ' (na de wissel)' : ''}` +
+      `<span class="live-formation" title="Formatie">${esc(formationLabel(ctx.match))}</span></h2>` +
       '<div class="live-pitch">' +
       '<div class="live-pitch-lines" aria-hidden="true"><i class="live-pl-mid"></i><i class="live-pl-circle"></i><i class="live-pl-box"></i><i class="live-pl-box live-pl-box-top"></i></div>' +
       rowHtml('S') + rowHtml('M') + rowHtml('V') + rowHtml('K') +
@@ -934,6 +953,8 @@
     clockLabel,
     normalizePeriod,
     lineupOf,
+    pitchRows,
+    formationOf,
     diffPeriods,
     describeDiff,
     scoreOf,

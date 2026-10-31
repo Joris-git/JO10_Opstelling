@@ -1,5 +1,8 @@
 // JO10 Opstelling — wisselschema-logica. Pure functies, geen DOM. Werkt in browser én Node.
 //
+// Formatie: `formation` = basisformatie voor deze wedstrijd { K, V, M, S } (standaard 1-2-1-2, ook 1-2-2-1).
+// Zijn er minder spelers dan de formatie vraagt, dan wordt Config.formationFor(n, formation) gebruikt.
+//
 // Algoritme (generate):
 //   1. Per periode worden de "vaste" cellen bepaald: locks + keeper (een lock met code 'K' gaat boven
 //      `keepers`). Ontbrekende keepers worden aangevuld met suggestKeepers().
@@ -22,14 +25,44 @@
     return null;
   }
 
-  function formationFor(n) {
-    const C = cfg();
-    if (C && typeof C.formationFor === 'function') return C.formationFor(n);
-    if (n >= 6) return { K: 1, V: 2, M: 1, S: 2 };
-    if (n === 5) return { K: 1, V: 2, M: 1, S: 1 };
-    if (n === 4) return { K: 1, V: 1, M: 1, S: 1 };
-    return { K: 1, V: Math.max(0, n - 1), M: 0, S: 0 };
+  const DEFAULT_FORMATION = { K: 1, V: 2, M: 1, S: 2 };
+
+  // Basisformatie opschonen: gehele getallen ≥ 0, keeper altijd 1, minstens één veldspeler.
+  function normFormation(f) {
+    const out = { K: 1, V: 0, M: 0, S: 0 };
+    if (!f || typeof f !== 'object') return Object.assign({}, DEFAULT_FORMATION);
+    ['V', 'M', 'S'].forEach(c => {
+      const x = Math.floor(Number(f[c]));
+      out[c] = Number.isFinite(x) && x > 0 ? Math.min(x, 20) : 0;
+    });
+    if (out.V + out.M + out.S === 0) return Object.assign({}, DEFAULT_FORMATION);
+    return out;
   }
+
+  // Formatie bij n aanwezige spelers (delegeert naar Config; zelfde regel als reserve).
+  function formationFor(n, base) {
+    const b = normFormation(base);
+    const C = cfg();
+    if (C && typeof C.formationFor === 'function') return C.formationFor(n, b);
+    const f = Object.assign({}, b);
+    while (f.K + f.V + f.M + f.S > Math.max(1, n)) {
+      const order = ['S', 'M', 'V'].filter(c => f[c] > 0).sort((a, c) => f[c] - f[a]);
+      if (!order.length) break;
+      f[order[0]]--;
+    }
+    return f;
+  }
+
+  // Seizoensaandeel per linie volgens de verhouding in de basisformatie (2-1-2 → .4/.2/.4, 2-2-1 → .4/.4/.2).
+  function shareOf(base) {
+    const f = normFormation(base);
+    const t = f.V + f.M + f.S;
+    return { V: f.V / t, M: f.M / t, S: f.S / t };
+  }
+
+  // Max aantal periodes op dezelfde linie per wedstrijd (~helft, minimaal 2): 2/3/4 → 2, 5/6 → 3.
+  // Minimaal 2 zodat 2- en 4-periodenwedstrijden precies dezelfde regel houden als vóór de formatiekeuze.
+  const maxSameOf = P => Math.max(2, Math.ceil(P / 2));
 
   // ── constanten ──────────────────────────────────────────────────────────
   const CODES = ['K', 'V', 'M', 'S', 'W'];
@@ -40,7 +73,6 @@
     K: ['keeper', 'keepers'], V: ['verdediger', 'verdedigers'], M: ['middenvelder', 'middenvelders'],
     S: ['spits', 'spitsen'], W: ['wissel', 'wissels'],
   };
-  const SHARE = { V: 0.4, M: 0.2, S: 0.4 }; // seizoensbalans V:M:S = 2:1:2
 
   // Gewichten van de kostenfunctie (per speler opgeteld).
   const W = {
@@ -48,10 +80,10 @@
     AVOID: 400,     // per periode op een 'liever niet'-positie
     EVEN: 100,      // × wissels² — met vast totaal is dit minimaal bij gelijke verdeling (verschil ≤ 1)
     SEASON: 20,     // × wissels × seizoensschuld (geclipt op ±3) — max 120 < 2×EVEN, breekt gelijkheid dus nooit
-    REPEAT: 80,     // per periode boven de 2 op dezelfde veldpositie
+    REPEAT: 80,     // per periode boven max ~helft (ceil(P/2)) op dezelfde veldpositie
     P1: 60,         // vorige wedstrijd begonnen als wissel en nu weer
     VARIETY: 30,    // ≥ 2 veldperiodes maar maar één soort positie
-    BAL: 5,         // seizoensbalans V:M:S (Huber-afwijking, dus begrensd effect per periode)
+    BAL: 5,         // seizoensbalans V:M:S volgens formatieverhouding (Huber-afwijking, dus begrensd effect per periode)
     CHANGE: 6,      // positiewissel tussen twee opeenvolgende veldperiodes (rust/continuïteit)
   };
   const DEBT_CLIP = 3;
@@ -213,7 +245,9 @@
 
   // ── kostenmodel ────────────────────────────────────────────────────────
   // Bouwt de per-speler statische gegevens op; colCost(i, col) berekent de kosten van één spelerkolom.
-  function buildModel(players, P, hist, avoidOf) {
+  function buildModel(players, P, hist, avoidOf, base) {
+    const SHARE = shareOf(base);
+    const maxSame = maxSameOf(P);
     const info = historyInfo(hist);
     const last = lastMatch(hist);
     const lastP1 = new Set(last && last.periodes[0] ? last.periodes[0].wissels : []);
@@ -242,7 +276,7 @@
       }
       let cost = W.EVEN * subs * subs + W.SEASON * subs * d.debt + W.CONSEC * consec + W.AVOID * avoidN + W.CHANGE * changes;
       if (d.p1 && P > 0 && col[0] === WI) cost += W.P1;
-      cost += W.REPEAT * (Math.max(0, cV - 2) + Math.max(0, cM - 2) + Math.max(0, cS - 2));
+      cost += W.REPEAT * (Math.max(0, cV - maxSame) + Math.max(0, cM - maxSame) + Math.max(0, cS - maxSame));
       const fieldN = cV + cM + cS;
       if (fieldN >= 2 && (cV === fieldN || cM === fieldN || cS === fieldN)) cost += W.VARIETY;
       const tV = d.hV + cV, tM = d.hM + cM, tS = d.hS + cS, T = tV + tM + tS;
@@ -270,10 +304,11 @@
 
     const hist = normHistory(opts.history);
     const avoidOf = avoidLookup(sq);
-    const form = formationFor(n);
+    const base = normFormation(opts.formation);
+    const form = formationFor(n, base);
     const fieldCount = form.K + form.V + form.M + form.S;
     const cap = [form.K, form.V, form.M, form.S, Math.max(0, n - fieldCount)];
-    if (n < 6) warnings.push(`Maar ${n} spelers aanwezig: formatie ${form.K}-${form.V}-${form.M}-${form.S}`);
+    if (n < base.K + base.V + base.M + base.S) warnings.push(`Maar ${n} spelers aanwezig: formatie ${form.K}-${form.V}-${form.M}-${form.S}`);
     const index = new Map(players.map((p, i) => [p, i]));
 
     // Locks per periode
@@ -347,7 +382,7 @@
       fixed.push(f); freeIdx.push(fi); freeCodes.push(fc);
     }
 
-    const model = buildModel(players, P, hist, avoidOf);
+    const model = buildModel(players, P, hist, avoidOf, base);
     const colCost = model.colCost;
     const rng = mulberry32(seedOf(opts.seed === undefined ? 1 : opts.seed));
 
@@ -470,7 +505,7 @@
       warnings.push(`${kName} staat in periode ${p + 1} vast als ${LABEL[c]}; ${keepersOut[p] || 'niemand'} keept`);
     });
 
-    const ev = evaluate(periodes, { players, keepers: keepersOut, history: opts.history, squad: sq });
+    const ev = evaluate(periodes, { players, keepers: keepersOut, history: opts.history, squad: sq, formation: base });
     const allWarnings = [];
     warnings.concat(ev.warnings).forEach(w => { if (!allWarnings.includes(w)) allWarnings.push(w); });
     return {
@@ -493,7 +528,8 @@
     const keepers = Array.isArray(ctx.keepers) ? ctx.keepers : [];
     const avoidOf = avoidLookup(ctx.squad);
     const n = players.length;
-    const form = n ? formationFor(n) : { K: 0, V: 0, M: 0, S: 0 };
+    const form = n ? formationFor(n, ctx.formation) : { K: 0, V: 0, M: 0, S: 0 };
+    const maxSame = maxSameOf(P);
     const need = { K: form.K, V: form.V, M: form.M, S: form.S, W: Math.max(0, n - (form.K + form.V + form.M + form.S)) };
     const warnings = [];
     let penalty = 0;
@@ -556,7 +592,7 @@
         const ps = [];
         col.forEach((x, p) => { if (x === c) ps.push(p); });
         if (av.includes(c) && ps.length) { warnings.push(`${nm} staat als ${LABEL[c]} (liever niet): ${pList(ps)}`); penalty += 6 * ps.length; }
-        if (ps.length > 2) { warnings.push(`${nm} staat ${ps.length} periodes als ${LABEL[c]} (liever max 2)`); penalty += 4 * (ps.length - 2); }
+        if (ps.length > maxSame) { warnings.push(`${nm} staat ${ps.length} periodes als ${LABEL[c]} (liever max ${maxSame})`); penalty += 4 * (ps.length - maxSame); }
       });
     });
 
@@ -587,8 +623,9 @@
 
   JO10.Scheduler = {
     generate, evaluate, suggestKeepers, stats, formationFor,
+    DEFAULT_FORMATION: Object.assign({}, DEFAULT_FORMATION),
     // intern, voor tests
-    _mulberry32: mulberry32, _weights: W,
+    _mulberry32: mulberry32, _weights: W, _shareOf: shareOf, _maxSameOf: maxSameOf, _normFormation: normFormation,
   };
 
   if (typeof module !== 'undefined' && module.exports) module.exports = JO10.Scheduler;
