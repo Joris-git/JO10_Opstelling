@@ -269,3 +269,24 @@ test('mergeRemote: opstelling van remote, score lokaal tenzij remote nieuwer', (
   assert.equal(Live.mergeRemote(local, { id: 2 }, 0), local);
   assert.equal(Live.mergeRemote(local, null, 0), local);
 });
+
+test('pitchRows: rijen volgen de formatie van de opstelling (2-1-2 en 2-2-1)', () => {
+  const r212 = Live.pitchRows({ posities: { K1: 'K', V1: 'V', V2: 'V', M1: 'M', S1: 'S', S2: 'S' }, wissels: ['W1'] });
+  assert.deepEqual(r212, { S: ['S1', 'S2'], M: ['M1'], V: ['V1', 'V2'], K: ['K1'] });
+  const r221 = Live.pitchRows({ posities: { S1: 'S', M2: 'M', K1: 'K', V1: 'V', M1: 'M', V2: 'V' }, wissels: ['W1', 'W2'] });
+  assert.deepEqual(r221, { S: ['S1'], M: ['M2', 'M1'], V: ['V1', 'V2'], K: ['K1'] });
+  assert.deepEqual(Live.pitchRows(undefined), { S: [], M: [], V: [], K: [] });
+});
+
+test('formationOf: formatie-veld, anders afgeleid; wisseldiff ongewijzigd bij 2-2-1', () => {
+  assert.deepEqual(Live.formationOf({ formatie: '2-2-1', periodes: [] }), { K: 1, V: 2, M: 2, S: 1 });
+  assert.deepEqual(Live.formationOf({ periodes: [{ posities: { a: 'K', b: 'V', c: 'V', d: 'M', e: 'M', f: 'S' } }] }), { K: 1, V: 2, M: 2, S: 1 });
+  assert.deepEqual(Live.formationOf({ periodes: [] }), { K: 1, V: 2, M: 1, S: 2 });
+  const p1 = { posities: { K1: 'K', V1: 'V', V2: 'V', M1: 'M', M2: 'M', S1: 'S' }, wissels: ['W1'] };
+  const p2 = { posities: { K1: 'K', V1: 'V', V2: 'V', M1: 'M', W1: 'M', M2: 'S' }, wissels: ['S1'] };
+  const d = Live.diffPeriods(p1, p2);
+  assert.deepEqual(d.off, ['S1']);
+  assert.deepEqual(d.on, ['W1']);
+  assert.deepEqual(d.swaps, [{ off: 'S1', on: 'W1', pos: 'M' }]);
+  assert.deepEqual(d.moves, [{ name: 'M2', from: 'M', to: 'S' }]);
+});

@@ -382,6 +382,9 @@ input[type="date"].input { min-width: 0; }
 .keeper-row__label { font-weight: 700; font-size: 0.88rem; }
 .keeper-row__label small { color: var(--muted); font-weight: 600; margin-left: 4px; }
 .keeper-row__note { color: var(--warn-text); font-size: 0.78rem; }
+.formation-pick { display: grid; gap: 0; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+.formation-pick .seg__btn { font-size: 1rem; letter-spacing: 0.02em; }
+.formation-pick__hint { margin: 6px 0 0; }
 
 /* ══ Genereer ════════════════════════════════════════════════════════ */
 .gen-block { margin: 16px 0; }
@@ -433,8 +436,8 @@ input[type="date"].input { min-width: 0; }
 .pl-box { left: 25%; right: 25%; height: 14%; }
 .pl-box--top { top: -2px; border-top: none !important; }
 .pl-box--bot { bottom: -2px; border-bottom: none !important; }
-.pitch__row { position: relative; display: flex; justify-content: center; align-items: center; gap: 8px; min-height: 44px; }
-.pitch__row[data-code="V"], .pitch__row[data-code="S"] { justify-content: space-evenly; }
+/* space-evenly: één chip staat in het midden, twee (V, of M/S afhankelijk van de formatie) netjes verdeeld */
+.pitch__row { position: relative; display: flex; justify-content: space-evenly; align-items: center; gap: 8px; min-height: 44px; }
 
 .pc {
   position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 4px;

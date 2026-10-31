@@ -31,13 +31,59 @@
     },
     FIELD_CODES: ['V', 'M', 'S'],
 
-    // 6 tegen 6 (1-2-1-2). Bij minder spelers valt eerst een spits weg, dan een verdediger.
+    // 6 tegen 6. Formatie kies je per wedstrijd; standaard 1-2-1-2 (keeper, 2 verdedigers, 1 middenvelder, 2 spitsen).
     FORMATION: { K: 1, V: 2, M: 1, S: 2 },
-    formationFor(n) {
-      if (n >= 6) return { K: 1, V: 2, M: 1, S: 2 };
-      if (n === 5) return { K: 1, V: 2, M: 1, S: 1 };
-      if (n === 4) return { K: 1, V: 1, M: 1, S: 1 };
-      return { K: 1, V: Math.max(0, n - 1), M: 0, S: 0 };
+    FORMATIONS: [
+      { id: '2-1-2', label: 'K · 2-1-2', formation: { K: 1, V: 2, M: 1, S: 2 } },
+      { id: '2-2-1', label: 'K · 2-2-1', formation: { K: 1, V: 2, M: 2, S: 1 } },
+    ],
+    DEFAULT_FORMATION: '2-1-2',
+    // id ('V-M-S', bv. '2-2-1') → { K, V, M, S }. Bekende ids uit FORMATIONS, andere 'V-M-S' worden ontleed;
+    // onbekend/leeg → standaard.
+    formationById(id) {
+      const hit = this.FORMATIONS.find(x => x.id === id);
+      if (hit) return Object.assign({}, hit.formation);
+      const m = /^\s*(\d{1,2})-(\d{1,2})-(\d{1,2})\s*$/.exec(String(id == null ? '' : id));
+      if (m && +m[1] + +m[2] + +m[3] > 0) return { K: 1, V: +m[1], M: +m[2], S: +m[3] };
+      return Object.assign({}, this.FORMATIONS.find(x => x.id === this.DEFAULT_FORMATION).formation);
+    },
+    // { K, V, M, S } → id ('V-M-S')
+    formationId(f) {
+      if (!f || typeof f !== 'object') return this.DEFAULT_FORMATION;
+      return `${f.V | 0}-${f.M | 0}-${f.S | 0}`;
+    },
+    // Formatie waarmee een (opgeslagen) wedstrijd gespeeld is: match.formatie ('2-2-1') → match.format.formation →
+    // afgeleid uit de opstelling (grootste aantal per linie). Oude records zonder veld die binnen 1-2-1-2 passen
+    // (ook bij 4–5 spelers) → standaard 1-2-1-2.
+    matchFormation(m) {
+      if (m && typeof m.formatie === 'string' && m.formatie.trim()) return this.formationById(m.formatie.trim());
+      const ff = m && m.format && typeof m.format === 'object' ? m.format.formation : null;
+      if (ff && typeof ff === 'object') {
+        const f = { K: 1, V: Math.max(0, ff.V | 0), M: Math.max(0, ff.M | 0), S: Math.max(0, ff.S | 0) };
+        if (f.V + f.M + f.S > 0) return f;
+      }
+      const def = this.formationById(this.DEFAULT_FORMATION);
+      const cnt = { K: 1, V: 0, M: 0, S: 0 };
+      const per = m && m.periodes;
+      (Array.isArray(per) ? per : per && typeof per === 'object' ? Object.values(per) : []).forEach(p => {
+        const c = { V: 0, M: 0, S: 0 };
+        Object.values((p && p.posities) || {}).forEach(code => { if (code in c) c[code]++; });
+        ['V', 'M', 'S'].forEach(k => { cnt[k] = Math.max(cnt[k], c[k]); });
+      });
+      return ['V', 'M', 'S'].every(k => cnt[k] <= def[k]) ? def : cnt;
+    },
+    // Formatie bij n aanwezige spelers, uitgaande van de basisformatie (standaard 1-2-1-2).
+    // Te weinig spelers: haal één voor één een speler weg uit de grootste linie (aanval eerst bij gelijkstand,
+    // dan middenveld, dan verdediging). Keeper blijft altijd. 2-1-2 bij 5 → 2-1-1, bij 4 → 1-1-1.
+    formationFor(n, base) {
+      const f = Object.assign({ K: 1, V: 2, M: 1, S: 2 }, base || {});
+      const total = () => f.K + f.V + f.M + f.S;
+      while (total() > Math.max(1, n)) {
+        const order = ['S', 'M', 'V'].filter(c => f[c] > 0).sort((a, b) => f[b] - f[a]);
+        if (!order.length) break;
+        f[order[0]]--;
+      }
+      return f;
     },
     MIN_PLAYERS: 4,
 
@@ -68,6 +114,7 @@
     LS_THEME: 'jo10_theme',
     LS_LIVE: 'jo10_live_v2',
     LS_CALENDAR: 'jo10_calendar_v2',
+    LS_FORMATION: 'jo10_formatie_v2',             // laatst gekozen formatie (standaard voor een nieuwe wedstrijd)
 
     // Speelkalender: officiële iCal van de clubsite. Een GitHub Action zet die dagelijks in CALENDAR_FILE
     // (zelfde site als de app → geen CORS). CALENDAR_URL is de bron (en reserve voor direct ophalen).

@@ -12,9 +12,9 @@ const codeOf = (per, nm) => (per.wissels.includes(nm) ? 'W' : per.posities[nm] |
 const column = (res, nm) => res.periodes.map(per => codeOf(per, nm));
 
 // Controleert alle harde regels; geeft lijst met fouten terug.
-function hardViolations(res, players, keepers, locks = []) {
+function hardViolations(res, players, keepers, locks = [], base) {
   const errs = [];
-  const form = Config.formationFor(players.length);
+  const form = Config.formationFor(players.length, base);
   const subsNeeded = players.length - (form.K + form.V + form.M + form.S);
   res.periodes.forEach((per, p) => {
     const cnt = { K: 0, V: 0, M: 0, S: 0 };
@@ -426,5 +426,142 @@ test('prestatie: < 150 ms per schema bij 8–10 spelers', () => {
       worst = Math.max(worst, Number(process.hrtime.bigint() - t) / 1e6);
     }
     assert.ok(worst < 150, `n=${n}: ${worst.toFixed(1)} ms`);
+  }
+});
+
+// ── Formatie per wedstrijd (2-1-2 standaard, 2-2-1) ───────────────────────
+
+const F212 = Config.formationById('2-1-2');
+const F221 = Config.formationById('2-2-1');
+
+// Opstelling als compacte tekst: per periode de code per speler in NAMES-volgorde (alleen aanwezigen).
+const encode = res => res.periodes.map(p => NAMES.filter(n => n in p.posities || p.wissels.includes(n))
+  .map(n => (p.wissels.includes(n) ? 'W' : p.posities[n])).join('')).join('|');
+
+// Vastgelegd met de scheduler van vóór de formatiekeuze (commit 8b7a752): zonder `formation` (en met
+// expliciet 2-1-2) moet generate exact dezelfde schema's blijven geven.
+const GOLDEN_212 = [
+  '5:1:KVVMS|KMVSV|SKMVV|VKSVM', '5:7:KVSMV|KMSVV|MKVVS|VKVSM', '5:42:KVSVM|KMSVV|MKVSV|VKVMS',
+  '6:1:KVSMSV|KMSVSV|MKVSVS|VKVSMS', '6:7:KMSVVS|KVSMVS|VKMSSV|SKVSMV', '6:42:KVSSMV|KMSSVV|SKVVSM|VKMVSS',
+  '7:1:KWMVVSS|KMVVWSS|MKWSSVV|WKSSMVV', '7:7:KWMVSVS|KMSVSVW|MKWSVSV|WKVSVSM', '7:42:KWVVMSS|KMWVVSS|MKSSWVV|WKMSSVV',
+  '8:1:KWMSWSVV|KMWSVVWS|VKSWVWSM|WKVVSMSW', '8:7:KWMVVSWS|KVWMSWSV|SKVWWVSM|WKSSMVVW', '8:42:KWWVMVSS|KMVWVWSS|VKVMSSWW|WKSSWMVV',
+  '9:1:KWWSVSMVW|KMSVWWSWV|VKWWSVWMS|WKVMWWVSS', '9:7:KWWMSSVVW|KVVSWWWMS|SKWWVMSWV|WKSVWVWSM', '9:42:KWSVMWWSV|KMSWWSVVW|VKWSSVWWM|WKVWVWSMS',
+];
+const GOLDEN_212_SEASON = ['KWVSSWMV|KVSMWVSW|VKMWVSWS|WKWVMSVS', 'SKWSVMV|SKSWVMV|WMKVSVS|MWKVSVS',
+  'SVKWSVMW|VVKSMWWS|VWVKWSSM|WMWKVSSV', 'MVVKWSS|MVVKSSW|SWSMKVV|VMSSKWV'];
+
+test('formatie: zonder formation (en met 2-1-2) exact dezelfde schema\'s als vóór de formatiekeuze', () => {
+  for (const extra of [{}, { formation: F212 }, { formation: { K: 1, V: 2, M: 1, S: 2 } }, { formation: null }]) {
+    const got = [];
+    for (const n of [5, 6, 7, 8, 9]) for (const seed of [1, 7, 42]) {
+      const players = NAMES.slice(0, n);
+      const keepers = [players[0], players[0], players[1], players[1]];
+      got.push(`${n}:${seed}:` + encode(Scheduler.generate(Object.assign({ players, keepers, periods: 4, history: [], squad: SQUAD, seed, locks: [] }, extra))));
+    }
+    assert.deepStrictEqual(got, GOLDEN_212, JSON.stringify(extra));
+    // met seizoenshistorie (seizoensbalans + P1-regel)
+    const out = []; const history = [];
+    for (let m = 0; m < 4; m++) {
+      const players = NAMES.slice(0, 8 - (m % 2));
+      const keepers = [players[m], players[m], players[m + 1], players[m + 1]];
+      const r = Scheduler.generate(Object.assign({ players, keepers, periods: 4, history: history.slice(), squad: SQUAD, seed: 100 + m, locks: [] }, extra));
+      out.push(encode(r));
+      history.push({ id: m + 1, datum: `2026-09-0${m + 1}`, periodes: r.periodes });
+    }
+    assert.deepStrictEqual(out, GOLDEN_212_SEASON, JSON.stringify(extra));
+  }
+});
+
+test('formatie: Config.FORMATIONS, formationById/formationId en formationFor(n, base)', () => {
+  assert.deepStrictEqual(Config.FORMATIONS.map(f => f.id), ['2-1-2', '2-2-1']);
+  assert.strictEqual(Config.DEFAULT_FORMATION, '2-1-2');
+  assert.deepStrictEqual(F221, { K: 1, V: 2, M: 2, S: 1 });
+  assert.deepStrictEqual(Config.formationById('onzin'), F212);
+  assert.deepStrictEqual(Config.formationById('3-1-1'), { K: 1, V: 3, M: 1, S: 1 });   // generiek
+  assert.strictEqual(Config.formationId(F221), '2-2-1');
+  // minder spelers: grootste linie eerst, aanval eerst bij gelijkstand
+  assert.deepStrictEqual(Config.formationFor(5, F221), { K: 1, V: 2, M: 1, S: 1 });
+  assert.deepStrictEqual(Config.formationFor(4, F221), { K: 1, V: 1, M: 1, S: 1 });
+  assert.deepStrictEqual(Config.formationFor(9, F221), F221);
+  for (let n = 1; n <= 12; n++) assert.deepStrictEqual(Scheduler.formationFor(n, F221), Config.formationFor(n, F221));
+  // oude vaste regel blijft gelden voor 2-1-2 (4..12 spelers)
+  assert.deepStrictEqual(Config.formationFor(5), { K: 1, V: 2, M: 1, S: 1 });
+  assert.deepStrictEqual(Config.formationFor(4), { K: 1, V: 1, M: 1, S: 1 });
+});
+
+test('formatie 2-2-1: harde regels over veel seeds en 4..10 spelers', () => {
+  for (let n = 4; n <= 10; n++) {
+    for (let seed = 1; seed <= 10; seed++) {
+      const players = NAMES.slice(0, n);
+      const keepers = seed % 2 ? Array(4).fill(players[seed % n]) : [0, 0, 1, 1].map(h => players[(seed + h * 3) % n]);
+      const res = Scheduler.generate({ players, keepers, periods: 4, history: [], squad: SQUAD, seed, locks: [], formation: F221 });
+      assert.deepStrictEqual(hardViolations(res, players, keepers, [], F221), [], `n=${n} seed=${seed}`);
+      if (n >= 6) res.periodes.forEach(per => {
+        const vals = Object.values(per.posities);
+        assert.strictEqual(vals.filter(c => c === 'M').length, 2);
+        assert.strictEqual(vals.filter(c => c === 'S').length, 1);
+      });
+    }
+  }
+});
+
+test('formatie 2-2-1: locks, 2 en 3 periodes, met historie', () => {
+  const players = NAMES.slice(0, 8);
+  const hist = makeHistory(3, players, (m, p) => [players[(m + p) % 8], players[(m + p + 4) % 8]]);
+  const locks = [{ period: 0, player: 'Bram', code: 'M' }, { period: 1, player: 'Coen', code: 'S' }, { period: 2, player: 'Izzy', code: 'W' }];
+  const res = Scheduler.generate({ players, keepers: ['Noud', 'Noud', 'James', 'James'], periods: 4, history: hist, squad: SQUAD, seed: 3, locks, formation: F221 });
+  assert.deepStrictEqual(hardViolations(res, players, ['Noud', 'Noud', 'James', 'James'], locks, F221), []);
+  for (const P of [2, 3]) {
+    const keepers = Array(P).fill('Noud');
+    const r = Scheduler.generate({ players, keepers, periods: P, history: hist, squad: SQUAD, seed: 5, formation: F221 });
+    assert.strictEqual(r.periodes.length, P);
+    assert.deepStrictEqual(hardViolations(r, players, keepers, [], F221), []);
+  }
+});
+
+test('formatie 2-2-1: deterministisch per seed, anders dan 2-1-2', () => {
+  const players = NAMES.slice(0, 8);
+  const keepers = ['Noud', 'Noud', 'James', 'James'];
+  const a = Scheduler.generate({ players, keepers, periods: 4, history: [], squad: SQUAD, seed: 11, formation: F221 });
+  const b = Scheduler.generate({ players, keepers, periods: 4, history: [], squad: SQUAD, seed: 11, formation: Object.assign({}, F221) });
+  assert.deepStrictEqual(a, b);
+  const c = Scheduler.generate({ players, keepers, periods: 4, history: [], squad: SQUAD, seed: 11 });
+  assert.notDeepStrictEqual(a.periodes, c.periodes);
+  // evaluate met de juiste formatie: geen formatiewaarschuwingen; met de verkeerde wel
+  const ok = Scheduler.evaluate(a.periodes, { players, keepers, history: [], squad: SQUAD, formation: F221 });
+  assert.ok(!ok.warnings.some(w => w.startsWith('Formatie')), ok.warnings.join('\n'));
+  const wrong = Scheduler.evaluate(a.periodes, { players, keepers, history: [], squad: SQUAD });
+  assert.ok(wrong.warnings.some(w => w.startsWith('Formatie periode 1 klopt niet')), wrong.warnings.join('\n'));
+  assert.ok(a.fairness !== undefined && ok.score >= 70, `score ${ok.score}`);
+});
+
+test('formatie: seizoensbalans volgt de verhouding, max ~helft op dezelfde linie', () => {
+  assert.deepStrictEqual(Scheduler._shareOf(F212), { V: 0.4, M: 0.2, S: 0.4 });
+  assert.deepStrictEqual(Scheduler._shareOf(F221), { V: 0.4, M: 0.4, S: 0.2 });
+  assert.deepStrictEqual([2, 3, 4, 5, 6].map(Scheduler._maxSameOf), [2, 2, 2, 3, 3]);
+  // Bij 2-2-1 staat iedereen over 4 periodes hooguit 2× op dezelfde linie
+  for (let seed = 1; seed <= 5; seed++) {
+    const players = NAMES.slice(0, 8);
+    const res = Scheduler.generate({ players, keepers: ['Noud', 'Noud', 'James', 'James'], periods: 4, history: [], squad: SQUAD, seed, formation: F221 });
+    players.forEach(nm => {
+      const col = column(res, nm);
+      ['V', 'M', 'S'].forEach(c => assert.ok(col.filter(x => x === c).length <= 2, `seed=${seed} ${nm}: ${col}`));
+    });
+  }
+  // Seizoen met veel middenveld voor Giulio → bij 2-2-1 (middenveld = 40%) krijgt hij minder M dan bij 2-1-2-quota zou
+  const players = NAMES.slice(0, 6);
+  const hist = makeHistory(5, players, () => [], (x, i, m, p) => (x === 'Giulio' ? 'M' : ['K', 'V', 'V', 'S', 'S'][(i + m + p) % 5]));
+  for (let seed = 1; seed <= 4; seed++) {
+    const res = Scheduler.generate({ players, keepers: ['Noud', 'Noud', 'James', 'James'], periods: 4, history: hist, squad: SQUAD, seed, formation: F221 });
+    const col = column(res, 'Giulio');
+    assert.ok(col.filter(c => c === 'M').length <= 1, `seed ${seed}: ${col}`);
+  }
+});
+
+test('formatie: avoid blijft werken bij 2-2-1 (Bastiaan geen spits)', () => {
+  const players = NAMES.slice(0, 8);
+  for (let seed = 1; seed <= 6; seed++) {
+    const res = Scheduler.generate({ players, keepers: ['Noud', 'Noud', 'James', 'James'], periods: 4, history: [], squad: SQUAD, seed, formation: F221 });
+    assert.ok(!column(res, 'Bastiaan').includes('S'), `seed ${seed}`);
   }
 });

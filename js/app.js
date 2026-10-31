@@ -27,17 +27,58 @@
       S: { code: 'S', label: 'Spits', short: 'S', icon: '⚡', color: '#ef4444' },
       W: { code: 'W', label: 'Wissel', short: 'W', icon: '🪑', color: '#94a3b8' },
     },
-    formationFor(n) { return n >= 6 ? { K: 1, V: 2, M: 1, S: 2 } : n === 5 ? { K: 1, V: 2, M: 1, S: 1 } : n === 4 ? { K: 1, V: 1, M: 1, S: 1 } : { K: 1, V: Math.max(0, n - 1), M: 0, S: 0 }; },
+    FORMATIONS: [
+      { id: '2-1-2', label: 'K · 2-1-2', formation: { K: 1, V: 2, M: 1, S: 2 } },
+      { id: '2-2-1', label: 'K · 2-2-1', formation: { K: 1, V: 2, M: 2, S: 1 } },
+    ],
+    DEFAULT_FORMATION: '2-1-2',
+    formationFor(n, base) {
+      const f = Object.assign({ K: 1, V: 2, M: 1, S: 2 }, base || {});
+      while (f.K + f.V + f.M + f.S > Math.max(1, n)) {
+        const order = ['S', 'M', 'V'].filter(c => f[c] > 0).sort((a, b) => f[b] - f[a]);
+        if (!order.length) break;
+        f[order[0]]--;
+      }
+      return f;
+    },
     periodTimes(periods, minutes) {
       const len = minutes / periods; const f = x => String(Math.round(x * 10) / 10).replace('.', ',');
       return Array.from({ length: periods }, (_, i) => `${f(i * len)}–${f((i + 1) * len)} min`);
     },
     LS_MATCHES: 'jo10_matches_v1', LS_SQUAD: 'jo10_squad_v2', LS_DRAFT: 'jo10_draft_v2', LS_THEME: 'jo10_theme', LS_LIVE: 'jo10_live_v2',
+    LS_FORMATION: 'jo10_formatie_v2',
   };
   const C = () => JO10.Config || FALLBACK_CFG;
   const POS = code => ((C().POSITIONS || FALLBACK_CFG.POSITIONS)[code]) || { code, label: code, icon: '', color: '#94a3b8' };
   const TEAM = () => C().TEAM_NAME || 'JO10';
   const MIN_PLAYERS = () => C().MIN_PLAYERS || 4;
+
+  // ── Formatie (per wedstrijd: '2-1-2' = K-VV-M-SS, '2-2-1' = K-VV-MM-S) ──
+  const FORMATIONS = () => C().FORMATIONS || FALLBACK_CFG.FORMATIONS;
+  const DEFAULT_FORMATIE = () => C().DEFAULT_FORMATION || FALLBACK_CFG.DEFAULT_FORMATION;
+  const isFormatie = id => FORMATIONS().some(f => f.id === id);
+  function formationById(id) {
+    if (typeof C().formationById === 'function') return C().formationById(id);
+    const f = FORMATIONS().find(x => x.id === id) || FORMATIONS().find(x => x.id === DEFAULT_FORMATIE());
+    return Object.assign({}, f.formation);
+  }
+  const formatieId = f => `${f.V | 0}-${f.M | 0}-${f.S | 0}`;
+  // Formatie van een opgeslagen wedstrijd (veld `formatie`, anders afgeleid uit de opstelling)
+  function matchFormation(m) {
+    if (typeof C().matchFormation === 'function') return C().matchFormation(m);
+    return m && typeof m.formatie === 'string' ? formationById(m.formatie) : formationById(DEFAULT_FORMATIE());
+  }
+  const formationFor = (n, base) => (C().formationFor || FALLBACK_CFG.formationFor).call(C(), n, base);
+  const fieldCount = f => f.K + f.V + f.M + f.S;
+  // Laatst gekozen formatie (standaard voor een nieuwe wedstrijd)
+  function lastFormatie() {
+    const v = lsGet(C().LS_FORMATION || FALLBACK_CFG.LS_FORMATION);
+    return isFormatie(v) ? v : DEFAULT_FORMATIE();
+  }
+  function formationWords(f) {
+    const pl = (n, one, more) => `${n} ${n === 1 ? one : more}`;
+    return `keeper, ${pl(f.V, 'verdediger', 'verdedigers')}, ${pl(f.M, 'middenvelder', 'middenvelders')}, ${pl(f.S, 'spits', 'spitsen')}`;
+  }
 
   // ═══════════════════════════════════════════════════════════════════
   // Kleine hulpfuncties
@@ -295,7 +336,16 @@
   }
 
   // ── Concept (draft) ────────────────────────────────────────────────
-  function sigOf(d) { return JSON.stringify([d.aanwezig.slice().sort(), d.keepers, d.periods]); }
+  // Formatie telt alleen mee als die afwijkt van de standaard, zodat bestaande concepten (zonder formatie) niet verouderen.
+  function sigOf(d) {
+    const sig = [d.aanwezig.slice().sort(), d.keepers, d.periods];
+    if (d.formatie && d.formatie !== DEFAULT_FORMATIE()) sig.push(d.formatie);
+    return JSON.stringify(sig);
+  }
+  const draftFormation = d => formationById(d.formatie || DEFAULT_FORMATIE());
+  // Formatie waarmee het huidige schema gemaakt is (uit de opstelling zelf), zodat de eerlijkheidsscore klopt
+  // ook als de trainer net een andere formatie koos en nog niet op "Werk bij" tikte.
+  const schemaFormation = d => (d.periodes ? matchFormation({ periodes: d.periodes }) : draftFormation(d));
   function isStale(d) { return !!(d.periodes && d.sig !== sigOf(d)); }
   function hasUnsaved(d) { return !!(d && d.periodes && d.dirty); }
   function keepersValid(d) { return d.keepers.length === d.periods && d.keepers.every(k => k && d.aanwezig.includes(k)); }
@@ -305,7 +355,7 @@
     const d = {
       datum: todayISO(), tegenstander: '', thuisUit: 'thuis',
       aanwezig: St.activePlayers(), keepers: [], periodes: null, locks: [],
-      seed: randSeed(), savedId: null,
+      seed: randSeed(), savedId: null, formatie: lastFormatie(),
       // UI-extra's (lokaal concept, niet in Match)
       periods: st.periods, guests: [], sameKeeper: false, keepersAuto: true, dirty: false, sig: null,
     };
@@ -322,6 +372,10 @@
     d.guests = Array.isArray(d.guests) ? d.guests : [];
     d.locks = Array.isArray(d.locks) ? d.locks.filter(l => l && l.player != null && l.period != null) : [];
     d.periodes = Array.isArray(d.periodes) && d.periodes.length ? d.periodes.map(normPeriod) : null;
+    // Concept van vóór de formatiekeuze: dat schema is 2-1-2. Onbekende id → afleiden uit het schema.
+    if (typeof raw.formatie !== 'string' || !/^\d{1,2}-\d{1,2}-\d{1,2}$/.test(raw.formatie)) {
+      d.formatie = d.periodes ? formatieId(matchFormation({ periodes: d.periodes })) : lastFormatie();
+    }
     d.periods = d.periodes ? d.periodes.length : ([2, 4].includes(+d.periods) ? +d.periods : st.periods);
     d.keepers = Array.isArray(d.keepers) ? d.keepers.slice(0, d.periods) : [];
     while (d.keepers.length < d.periods) d.keepers.push('');
@@ -332,7 +386,7 @@
   }
   function newDraftShell(st) {
     return { datum: todayISO(), tegenstander: '', thuisUit: 'thuis', aanwezig: [], keepers: [], periodes: null, locks: [],
-      seed: randSeed(), savedId: null, periods: st.periods, guests: [], sameKeeper: false, keepersAuto: true, dirty: false, sig: null };
+      seed: randSeed(), savedId: null, formatie: lastFormatie(), periods: st.periods, guests: [], sameKeeper: false, keepersAuto: true, dirty: false, sig: null };
   }
   function draftFromMatch(m) {
     const periodes = (m.periodes || []).map(normPeriod);
@@ -345,6 +399,7 @@
     const d = {
       datum: m.datum || todayISO(), tegenstander: m.tegenstander || '', thuisUit: m.thuisUit === 'uit' ? 'uit' : 'thuis',
       aanwezig, keepers, periodes: periodes.length ? periodes : null, locks: [], seed: randSeed(), savedId: m.id,
+      formatie: formatieId(matchFormation(m)),
       periods: periodes.length || settings().periods, guests: aanwezig.filter(n => !squadNames.has(n)),
       sameKeeper: keepers.length > 1 && keepers.every(k => k && k === keepers[0]), keepersAuto: false, dirty: false, sig: null,
     };
@@ -893,11 +948,11 @@
     }).join('');
     let hint;
     if (n < min) hint = `<p class="note note--warn">⚠️ Minimaal ${min} spelers nodig${n ? ` (nu ${n})` : ''}.</p>`;
-    else if (n < 6) {
-      const f = (C().formationFor || FALLBACK_CFG.formationFor)(n);
-      hint = `<p class="note note--info">${n} spelers → geen wissels, je speelt met ${f.V} verdediger${f.V === 1 ? '' : 's'}, ${f.M} middenvelder en ${f.S} spits${f.S === 1 ? '' : 'en'}.</p>`;
+    else if (n < fieldCount(draftFormation(d))) {
+      const f = formationFor(n, draftFormation(d));
+      hint = `<p class="note note--info">${n} spelers → geen wissels, je speelt met ${f.V} verdediger${f.V === 1 ? '' : 's'}, ${f.M} middenvelder${f.M === 1 ? '' : 's'} en ${f.S} spits${f.S === 1 ? '' : 'en'}.</p>`;
     } else {
-      const w = n - 6;
+      const w = n - fieldCount(draftFormation(d));
       hint = `<p class="note note--info">${n} spelers → <b>${w}</b> wissel${w === 1 ? '' : 's'} per periode${w === 0 ? ' (iedereen speelt alles)' : ''}${w > 4 ? ' — dat zijn er wel veel' : ''}.</p>`;
     }
     el.innerHTML = `<div class="card__head"><h2 class="card__title"><span class="step-num" aria-hidden="true">2</span> Aanwezig <span class="count-badge">${n}</span></h2>
@@ -937,11 +992,20 @@
       if (differs) hint += ` <button type="button" class="link-btn" data-act="keeper-suggest">Gebruik voorstel</button>`;
     }
     const missing = !keepersValid(d) && d.aanwezig.length >= MIN_PLAYERS();
-    el.innerHTML = `<h2 class="card__title"><span class="step-num" aria-hidden="true">3</span> Keepers</h2>
+    el.innerHTML = `<h2 class="card__title"><span class="step-num" aria-hidden="true">3</span> Keepers &amp; formatie</h2>
       <div class="keeper-rows">${rows}</div>
       ${halves.length > 1 ? `<label class="switch"><input type="checkbox" data-change="same-keeper"${d.sameKeeper ? ' checked' : ''}><span class="switch__track" aria-hidden="true"></span><span>Zelfde keeper hele wedstrijd</span></label>` : ''}
       ${hint ? `<p class="hint">${hint}</p>` : ''}
-      ${missing ? '<p class="note note--warn">⚠️ Kies voor elke helft een keeper.</p>' : ''}`;
+      ${missing ? '<p class="note note--warn">⚠️ Kies voor elke helft een keeper.</p>' : ''}
+      ${formationHTML(d)}`;
+  }
+  function formationHTML(d) {
+    const list = FORMATIONS();
+    const cur = draftFormation(d);
+    return `<div class="formation-pick"><span class="field__label" id="lbl-form">Formatie</span>
+      <div class="seg" role="group" aria-labelledby="lbl-form">${list.map(f =>
+        `<button type="button" class="seg__btn" data-act="formatie" data-v="${esc(f.id)}" aria-pressed="${d.formatie === f.id}" aria-label="Formatie ${esc(f.id)}: ${esc(formationWords(f.formation))}">${esc(f.id)}</button>`).join('')}</div>
+      <p class="hint formation-pick__hint">${esc(formationWords(cur).replace(/^k/, 'K'))}</p></div>`;
   }
   function renderGenerate() {
     const el = $('#w-generate'); if (!el) return;
@@ -961,7 +1025,7 @@
     const f = modFn('Scheduler', 'evaluate');
     let ev = null;
     if (f) {
-      try { ev = f(clone(d.periodes), { players: d.aanwezig.slice(), keepers: d.keepers.slice(), history: historyExcl(d.savedId), squad: St.getSquad() }); }
+      try { ev = f(clone(d.periodes), { players: d.aanwezig.slice(), keepers: d.keepers.slice(), history: historyExcl(d.savedId), squad: St.getSquad(), formation: schemaFormation(d) }); }
       catch (e) { reportError(e, 'Controle van het schema mislukte.'); }
     }
     ev = ev && typeof ev === 'object' ? ev : {};
@@ -1008,7 +1072,7 @@
     const times = periodTimes(d.periods, settings().minutes);
     const o = { editable: true, locks: d.locks, sel: S.sel, order: d.aanwezig, times, key: 'editor' };
     el.innerHTML = `<div class="card__head"><h2 class="card__title"><span class="step-num" aria-hidden="true">4</span> Wisselschema</h2>${viewToggleHTML(S.view, 'view')}</div>
-      ${stale ? `<div class="note note--warn stale">Aanwezigheid of keepers zijn gewijzigd. <button type="button" class="btn btn--primary btn--sm" data-act="generate">⚡ Werk bij</button></div>` : ''}
+      ${stale ? `<div class="note note--warn stale">Aanwezigheid, keepers of formatie zijn gewijzigd. <button type="button" class="btn btn--primary btn--sm" data-act="generate">⚡ Werk bij</button></div>` : ''}
       ${fairHTML(ev.score)}
       ${warnings.length ? `<ul class="warnings">${warnings.map(w => `<li>⚠️ ${esc(w)}</li>`).join('')}</ul>` : (ev.score != null ? '<p class="note note--ok">✓ Geen aandachtspunten — iedereen komt eerlijk aan bod.</p>' : '')}
       <div class="schema-view schema-view--${S.view}">${S.view === 'tabel' ? tabelHTML(d.periodes, o) + legendHTML() : veldHTML(d.periodes, o)}</div>
@@ -1100,7 +1164,7 @@
   }
   function pushUndo() {
     const d = S.draft;
-    S.undo.push(clone({ periodes: d.periodes, keepers: d.keepers, locks: d.locks, sig: d.sig, sameKeeper: d.sameKeeper }));
+    S.undo.push(clone({ periodes: d.periodes, keepers: d.keepers, locks: d.locks, sig: d.sig, sameKeeper: d.sameKeeper, formatie: d.formatie }));
     if (S.undo.length > 30) S.undo.shift();
     dismissActionToasts();
   }
@@ -1109,7 +1173,7 @@
     dismissActionToasts();
     Object.assign(S.draft, snap); S.draft.dirty = true; S.sel = null; S.genWarnings = [];
     persistDraft();
-    refreshDraftUI(['keepers', 'generate', 'schema', 'actions']);
+    refreshDraftUI(['aanwezig', 'keepers', 'generate', 'schema', 'actions']);
     toast('Laatste wijziging teruggedraaid', 'info');
   }
   function doGenerate(newSeed) {
@@ -1125,7 +1189,7 @@
       if (newSeed) seed = randSeed();
       res = callMod('Scheduler', 'generate', [{
         players: d.aanwezig.slice(), keepers: d.keepers.slice(), periods: d.periods,
-        history: historyExcl(d.savedId), squad: St.getSquad(), seed, locks: clone(locks),
+        history: historyExcl(d.savedId), squad: St.getSquad(), seed, locks: clone(locks), formation: draftFormation(d),
       }], null, 'Het schema kon niet gemaakt worden.');
       if (!res || !Array.isArray(res.periodes) || !res.periodes.length) break;
       if (!newSeed || JSON.stringify(res.periodes.map(normPeriod)) !== before) break;
@@ -1238,6 +1302,8 @@
       tegenstander, thuisUit: d.thuisUit,
       score: existing && existing.score ? existing.score : null,
       periodes, v: 2, aanwezig: d.aanwezig.slice(), keepers: d.keepers.slice(),
+      // nieuw (optioneel, v1 negeert het): formatie waarmee gespeeld wordt
+      formatie: d.formatie || DEFAULT_FORMATIE(), format: { formation: draftFormation(d) },
     });
   }
   // Eén opslag tegelijk: een dubbele tik (of "Opslaan" + "Start live") tijdens een trage Firebase-flush
@@ -1252,7 +1318,7 @@
     const d = S.draft;
     if (!d.periodes || !d.periodes.length) { toast('Maak eerst een wisselschema — zonder schema kan er niets opgeslagen worden.', 'warn'); scrollIntoView($('#w-generate')); return null; }
     if (isStale(d)) {
-      const ok = await confirmDialog({ title: 'Schema is niet bijgewerkt', message: 'Aanwezigheid of keepers zijn gewijzigd na het maken van het schema. Toch dit schema opslaan?', ok: 'Toch opslaan', cancel: 'Eerst bijwerken' });
+      const ok = await confirmDialog({ title: 'Schema is niet bijgewerkt', message: 'Aanwezigheid, keepers of formatie zijn gewijzigd na het maken van het schema. Toch dit schema opslaan?', ok: 'Toch opslaan', cancel: 'Eerst bijwerken' });
       if (!ok) { scrollIntoView($('#w-schema')); return null; }
     }
     const match = buildMatch(d);
@@ -1577,7 +1643,7 @@
       <div class="detail-top"><button type="button" class="btn btn--ghost btn--sm" data-act="close-detail">← Seizoen</button></div>
       <div class="card">
         <div class="detail-head"><h1 class="detail-title">${m.thuisUit === 'uit' ? '✈️' : '🏠'} ${esc(m.tegenstander || 'Onbekend')}</h1>
-          <p class="hint">${esc(fmtDate(m.datum, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }))} · ${m.thuisUit === 'uit' ? 'uit' : 'thuis'}</p>
+          <p class="hint">${esc(fmtDate(m.datum, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }))} · ${m.thuisUit === 'uit' ? 'uit' : 'thuis'}${m.periodes.length ? ` · formatie ${esc(formatieId(matchFormation(m)))}` : ''}</p>
           ${r ? `<p class="detail-score res res--${r}">${RESULT_ICON[r]} ${RESULT_LABEL[r]} <b>${m.score.home}–${m.score.away}</b></p>` : ''}</div>
         <div class="subcard"><h3 class="subcard__title">Uitslag</h3>${scoreEditorHTML(m)}</div>
         ${goals.length ? `<div class="subcard"><h3 class="subcard__title">Doelpunten</h3><ul class="goals">${goals.map(g => `<li class="goal goal--${g.team === 'away' ? 'away' : 'home'}">
@@ -1918,6 +1984,15 @@
     'att-none': () => { const d = S.draft; d.aanwezig = []; ensureKeepers(d); changed(); refreshDraftUI(['aanwezig', 'keepers', 'generate', 'schema', 'actions']); },
     'add-guest': () => addGuest(),
     'remove-guest': ds => { const d = S.draft; d.guests = d.guests.filter(g => g !== ds.name); d.aanwezig = d.aanwezig.filter(n => n !== ds.name); ensureKeepers(d); changed(); refreshDraftUI(['aanwezig', 'keepers', 'generate', 'schema', 'actions']); },
+    formatie: ds => {
+      const d = S.draft;
+      if (!isFormatie(ds.v) || d.formatie === ds.v) return;
+      d.formatie = ds.v;
+      lsSet(C().LS_FORMATION || FALLBACK_CFG.LS_FORMATION, ds.v);
+      S.sel = null; changed();
+      refreshDraftUI(['aanwezig', 'keepers', 'generate', 'schema', 'actions']);
+      if (d.periodes) toast(`Formatie ${ds.v} gekozen — tik op ⚡ Werk bij voor een nieuw schema.`, 'info');
+    },
     'keeper-suggest': () => { const d = S.draft; d.keepersAuto = true; autoKeepers(d); changed(); refreshDraftUI(['keepers', 'generate', 'schema', 'actions']); },
     generate: () => doGenerate(false),
     reshuffle: () => doGenerate(true),

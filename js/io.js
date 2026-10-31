@@ -1,5 +1,7 @@
 // JO10 Opstelling — export/import: PNG (deelbaar plaatje), Excel (v1-formaat + seizoensoverzicht), WhatsApp-tekst.
-// Pure delen (parseRows, buildSchemaRows, buildSeasonRows, pngLayout, whatsappText) zijn zonder DOM testbaar.
+// Werkt voor elke formatie (per wedstrijd: match.formatie, standaard 1-2-1-2); Excel-kolommen volgen de formatie,
+// met exact de oude v1-kopregel voor 1-2-1-2. Pure delen (parseRows, buildSchemaRows, buildSeasonRows, pngLayout,
+// whatsappText) zijn zonder DOM testbaar.
 (function (root) {
   const JO10 = root.JO10 = root.JO10 || {};
 
@@ -14,6 +16,9 @@
   const envGet = k => (k in envOverride ? envOverride[k] : root[k]);
 
   const HDR = ['Tijd', 'Keeper', 'Verd 1', 'Verd 2', 'Midden', 'Spits 1', 'Spits 2', 'Wissel 1', 'Wissel 2'];
+  // Kolomnamen per linie. Eén kolom → zonder nummer ("Keeper", "Midden"); dat geeft voor 1-2-1-2 exact HDR.
+  const COL_LABEL = { K: 'Keeper', V: 'Verd', M: 'Midden', S: 'Spits', W: 'Wissel' };
+  const DEFAULT_FORMATION = { K: 1, V: 2, M: 1, S: 2 };
   const WEEKDAYS = ['zo', 'ma', 'di', 'wo', 'do', 'vr', 'za'];
   const MONTHS = ['jan', 'feb', 'mrt', 'apr', 'mei', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec'];
   const ORDER = ['K', 'V', 'M', 'S'];
@@ -34,6 +39,32 @@
 
   function namesFor(p, code) {
     return Object.keys(p.posities || {}).filter(n => p.posities[n] === code);
+  }
+
+  /** Formatie van een wedstrijd ({ K, V, M, S }): match.formatie → match.format.formation → afgeleid. */
+  function formationOf(match) {
+    const C = cfg();
+    if (typeof C.matchFormation === 'function') return C.matchFormation(match);
+    return Object.assign({}, DEFAULT_FORMATION);
+  }
+  function formationLabel(f) {
+    const C = cfg();
+    return typeof C.formationId === 'function' ? C.formationId(f) : `${f.V}-${f.M}-${f.S}`;
+  }
+  const isDefaultFormation = f => ORDER.every(c => (f[c] | 0) === DEFAULT_FORMATION[c]);
+  // Aantal kolommen per linie in Excel: formatie, maar nooit minder dan er werkelijk in een periode staan.
+  function lineColumns(m) {
+    const f = formationOf(m);
+    const out = {};
+    ORDER.forEach(c => { out[c] = Math.max(f[c] | 0, ...m.periodes.map(p => namesFor(p, c).length)); });
+    out.K = Math.max(1, out.K);
+    return out;
+  }
+  function schemaHeader(cols, maxW) {
+    const hdr = ['Tijd'];
+    ORDER.forEach(c => { for (let i = 1; i <= cols[c]; i++) hdr.push(cols[c] === 1 ? COL_LABEL[c] : `${COL_LABEL[c]} ${i}`); });
+    for (let i = 1; i <= maxW; i++) hdr.push(`${COL_LABEL.W} ${i}`);
+    return hdr;
   }
 
   // 'YYYY-MM-DD' → Date (lokaal, zonder tijdzone-verschuiving)
@@ -161,8 +192,13 @@
         }
         if (!datum) datum = parseDate(titel);
       }
-      cur = { titel, datum, score, periodes: [] };
+      cur = { titel, datum, score, periodes: [], formation: null };
       cols = null;
+    };
+    const formationFromCols = c => {
+      const f = { K: 1, V: 0, M: 0, S: 0 };
+      c.forEach(([, code]) => { if (code === 'V' || code === 'M' || code === 'S') f[code]++; });
+      return f;
     };
 
     function finish() {
@@ -174,7 +210,7 @@
         cur.periodes.forEach(p => {
           Object.keys(p.posities).concat(p.wissels).forEach(n => { if (!aanwezig.includes(n)) aanwezig.push(n); });
         });
-        matches.push({
+        const match = {
           id: baseId++,
           titel,
           datum: cur.datum || '',
@@ -185,7 +221,13 @@
           v: 2,
           aanwezig,
           keepers: cur.periodes.map(p => namesFor(p, 'K')[0] || null),
-        });
+        };
+        // Formatie uit de kopregel (gegenereerde kolommen) — alleen vastleggen als die afwijkt van 1-2-1-2.
+        if (cur.formation && !isDefaultFormation(cur.formation)) {
+          match.formatie = formationLabel(cur.formation);
+          match.format = { formation: Object.assign({}, cur.formation) };
+        }
+        matches.push(match);
       } else if (cur && cur.titel) {
         warn(`Geen periodes gevonden bij "${cur.titel}"`);
       }
@@ -201,6 +243,7 @@
       if (isHeaderRow(r)) {
         if (!cur || cols) startBlock(null);
         cols = headerCodes(r);
+        cur.formation = formationFromCols(cols);
         continue;
       }
       const first = str(r[0]);
@@ -264,19 +307,19 @@
     const settings = (opts && opts.settings) || {};
     const list = sortByDate((matches || []).map(norm));
     const maxW = Math.max(2, ...list.map(m => Math.max(0, ...m.periodes.map(p => p.wissels.length))));
-    const hdr = HDR.slice(0, 7);
-    for (let i = 1; i <= maxW; i++) hdr.push(`Wissel ${i}`);
     const rows = [];
     list.forEach((m, mi) => {
       const titel = m.titel || buildTitel(m.tegenstander, m.thuisUit, settings);
       const head = [titel, isoToDMY(m.datum)];
       if (m.score) head.push(`Uitslag ${m.score.home}-${m.score.away}`);
       rows.push(head);
-      rows.push(hdr.slice());
+      // Kopregel per wedstrijd: de formatie kan per wedstrijd verschillen (1-2-1-2 → exact de v1-kolommen).
+      const cols = lineColumns(m);
+      rows.push(schemaHeader(cols, maxW));
       const times = periodTimeLabels(m.periodes.length || 1, minutesOf(settings), 'excel');
       m.periodes.forEach((p, i) => {
-        const k = namesFor(p, 'K'), v = namesFor(p, 'V'), md = namesFor(p, 'M'), s = namesFor(p, 'S');
-        const row = [times[i] || '', k[0] || '', v[0] || '', v[1] || '', md[0] || '', s[0] || '', s[1] || ''];
+        const row = [times[i] || ''];
+        ORDER.forEach(c => { const n = namesFor(p, c); for (let k = 0; k < cols[c]; k++) row.push(n[k] || ''); });
         for (let w = 0; w < maxW; w++) row.push(p.wissels[w] || '');
         rows.push(row);
       });
@@ -364,6 +407,8 @@
     const day = shortDay(m.datum);
     if (day) head += ` ${day}`;
     const lines = [head];
+    const form = formationOf(m);
+    if (!isDefaultFormation(form)) lines.push(`Formatie ${formationLabel(form)} (keeper, ${form.V} verd., ${form.M} midden, ${form.S} ${form.S === 1 ? 'spits' : 'spitsen'})`);
     const times = periodTimeLabels(m.periodes.length || 1, minutesOf(settings));
     m.periodes.forEach((p, i) => {
       lines.push('');
@@ -411,11 +456,13 @@
     const times = periodTimeLabels(n, minutesOf(settings));
     const team = teamName(settings);
     const teg = m.tegenstander || parseTitel(m.titel).tegenstander;
+    const formation = formationOf(m);
 
     const header = {
       x: 0, y: 0, w: width, h: L.HEADER_H,
       title: teg ? `${team} vs ${teg}` : (m.titel || team),
-      subtitle: [m.thuisUit === 'uit' ? '✈️ Uit' : '🏠 Thuis', longDay(m.datum)].filter(Boolean).join('  ·  '),
+      subtitle: [m.thuisUit === 'uit' ? '✈️ Uit' : '🏠 Thuis', longDay(m.datum),
+        isDefaultFormation(formation) ? '' : `Formatie ${formationLabel(formation)}`].filter(Boolean).join('  ·  '),
       score: m.score ? `${m.score.home} – ${m.score.away}` : null,
     };
 
@@ -459,7 +506,7 @@
       y += cellH + L.GAP;
     }
     const height = y - L.GAP + L.PAD + L.FOOTER_H;
-    return { width, height, scale: 2, cols, rows: rowsN, header, cells, footer: { y: height - L.FOOTER_H / 2 - 4, text: cfg().APP_NAME || 'JO10 Opstelling' } };
+    return { width, height, scale: 2, cols, rows: rowsN, formation, header, cells, footer: { y: height - L.FOOTER_H / 2 - 4, text: cfg().APP_NAME || 'JO10 Opstelling' } };
   }
 
   function roundRect(ctx, x, y, w, h, r) {
@@ -666,7 +713,8 @@
     exportPNG, exportExcel, importExcel, whatsappText,
     // pure helpers (tests / hergebruik)
     parseRows, buildSchemaRows, buildSeasonRows, seasonTotals, pngLayout, parseDate, exportFilename, pngFilename,
-    HEADER: HDR,
+    formationOf, schemaHeader,
+    HEADER: HDR,          // v1-kolommen (1-2-1-2); andere formaties krijgen gegenereerde kolommen
     _drawLayout: drawLayout,
     _setEnv(e) { envOverride = Object.assign({}, envOverride, e || {}); },
     _resetEnv() { envOverride = {}; },

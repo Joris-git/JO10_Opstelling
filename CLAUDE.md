@@ -13,7 +13,7 @@ Primair gebruik: **telefoon langs de lijn** (iPhone Safari), soms desktop.
 
 | Bestand | Inhoud | Globale naam |
 |---|---|---|
-| `js/config.js` | Constanten (posities, formatie, Firebase-config, localStorage-sleutels) | `JO10.Config` |
+| `js/config.js` | Constanten (posities, formaties + `formationFor`/`matchFormation`, Firebase-config, localStorage-sleutels) | `JO10.Config` |
 | `js/scheduler.js` | Pure logica: schema genereren, evalueren, keepers voorstellen, statistiek. Geen DOM. | `JO10.Scheduler` |
 | `js/store.js` | Opslag: localStorage-cache + Firebase realtime sync, selectie, concept | `JO10.Store` |
 | `js/io.js` | PNG-export, Excel import/export, WhatsApp-tekst | `JO10.IO` |
@@ -48,6 +48,8 @@ Match = {
   goals: [ { team: 'home'|'away', minute: number|null, by: naam|null } ],
   notitie: string,
   updatedAt: number,
+  formatie: '2-1-2' | '2-2-1',              // formatie van deze wedstrijd ('V-M-S'); ontbreekt → afleiden uit posities
+  format: { formation: { K, V, M, S } },     // zelfde formatie als object (voor de Sporting-app)
 }
 ```
 
@@ -66,7 +68,8 @@ Squad = {
 Als `jo10_squad` niet bestaat of niet leesbaar/schrijfbaar is (database-rules!) → `Config.DEFAULT_SQUAD`/lokale kopie gebruiken.
 
 Draft (alleen lokaal, `jo10_draft_v2`): de wedstrijd die je nu aan het voorbereiden bent, zodat niets verloren
-gaat bij herladen: `{ datum, tegenstander, thuisUit, aanwezig, keepers, periodes, locks, seed, savedId }`.
+gaat bij herladen: `{ datum, tegenstander, thuisUit, aanwezig, keepers, periodes, locks, seed, savedId, formatie }`.
+Laatst gekozen formatie (standaard voor een nieuwe wedstrijd): localStorage `jo10_formatie_v2`.
 
 ## API-contracten
 
@@ -80,9 +83,10 @@ generate({
   squad: Squad,               // voor avoid-voorkeuren
   seed: number,               // andere seed = ander (bijna-optimaal) schema → "Shuffle"
   locks: [ { period: i, player: naam, code: 'K'|'V'|'M'|'S'|'W' } ],  // vastgezette posities die behouden blijven
+  formation: { K:1, V, M, S },  // basisformatie van deze wedstrijd; weglaten = 1-2-1-2 (exact dezelfde schema's als vroeger)
 }) → { periodes: [{posities, wissels}], cost: number, warnings: [string], fairness: {...} }
 
-evaluate(periodes, { players, keepers, history, squad }) → {
+evaluate(periodes, { players, keepers, history, squad, formation }) → {
   warnings: [string],         // Nederlandstalig, bv. "Noud staat twee periodes achter elkaar wissel (P2 en P3)"
   perPlayer: { [naam]: { field: n, sub: n, K: n, V: n, M: n, S: n } },
   score: 0..100,              // eerlijkheidsscore voor deze wedstrijd
@@ -90,7 +94,7 @@ evaluate(periodes, { players, keepers, history, squad }) → {
 
 suggestKeepers({ players, history, squad, periods }) → [naam]   // keeper per periode: wie het minst gekeept heeft, per helft
 stats(history, names) → { [naam]: { matches, periods, K, V, M, S, W, fieldPct } }
-formationFor(n) → zie Config
+formationFor(n, base) → zie Config
 ```
 
 ### `JO10.Store`
@@ -150,12 +154,21 @@ kan in `data/trainingen.json` (`{ "weken": { "7": { "titel", "thema", "link" } }
 de trainingenpagina van de club. Elk seizoen `seasonStart` en `holidays` bijwerken.
 
 ## Regels voor het wisselschema (domein)
-- 6 tegen 6: Keeper, 2 Verdedigers, 1 Middenvelder, 2 Spitsen. 4 periodes van 12,5 min (instelbaar).
+- 6 tegen 6. **Formatie per wedstrijd** (`Config.FORMATIONS`, keuze in het Wedstrijd-scherm bij de keepers):
+  `2-1-2` = keeper, 2 verdedigers, 1 middenvelder, 2 spitsen (standaard, `Config.DEFAULT_FORMATION`) of
+  `2-2-1` = keeper, 2 verdedigers, 2 middenvelders, 1 spits. Generiek: formatie = `{ K:1, V, M, S }`; meer formaties =
+  regel toevoegen aan `FORMATIONS`. Formatie wijzigen na genereren maakt het schema verouderd ("Werk bij").
+  Minder spelers: `Config.formationFor(n, base)` haalt een speler weg uit de grootste linie (aanval eerst bij gelijkstand).
+  Weergave (veld, live, PNG, WhatsApp) volgt de aantallen in de opstelling; Excel krijgt kolommen uit de formatie
+  (1-2-1-2 = exact de v1-kopregel, 2-2-1 = `…|Midden 1|Midden 2|Spits|…`); import leest beide.
+  v1.html kent alleen 2-1-2: een 2-2-1-wedstrijd crasht daar niet, maar v1 toont/exporteert maar één middenvelder.
+- 4 periodes van 12,5 min (instelbaar).
 - Aantal wissels per periode = aanwezig − 6 (0 t/m 4).
 - **Hard:** formatie exact gevuld; keeper van periode p staat op K; niemand twee periodes achter elkaar wissel;
   een keeper is niet wissel in de periodes dat hij keept; vastgezette locks worden gerespecteerd.
 - **Zacht (kosten):** speeltijd zo gelijk mogelijk binnen de wedstrijd, en over het seizoen (wie vaak wissel was,
-  is nu minder vaak wissel); niet meer dan 2 periodes dezelfde veldpositie per wedstrijd; seizoensbalans V:M:S ≈ 2:1:2;
+  is nu minder vaak wissel); niet meer dan ~helft van de periodes (`max(2, ceil(P/2))`, bij 2–4 periodes 2) dezelfde veldpositie
+  per wedstrijd; seizoensbalans V:M:S volgens de formatie van de wedstrijd (2-1-2 → 2:1:2, 2-2-1 → 2:2:1);
   `avoid`-posities vermijden (zwaar); wie vorige wedstrijd in P1 wissel was, begint nu niet als wissel;
   liefst niet elke periode van positie wisselen (rust/continuïteit).
 

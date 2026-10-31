@@ -390,3 +390,85 @@ test('lange namen worden ingekort binnen de chip', () => {
   assert.ok(t.endsWith('…'));
   assert.ok(t.length * 7 <= L.cells[0].chips[0].maxW);
 });
+
+// ── Formatie per wedstrijd (2-2-1) ─────────────────────────────────────────
+const HDR_221 = ['Tijd', 'Keeper', 'Verd 1', 'Verd 2', 'Midden 1', 'Midden 2', 'Spits', 'Wissel 1', 'Wissel 2'];
+function match221(extra = {}) {
+  return Object.assign({
+    id: 1760000000100, titel: 'JO10 vs RKSV (🏠 Thuis)', datum: '2025-11-01', tegenstander: 'RKSV', thuisUit: 'thuis',
+    score: null, formatie: '2-2-1', format: { formation: { K: 1, V: 2, M: 2, S: 1 } },
+    periodes: [
+      { posities: { Abel: 'K', Noud: 'V', Bram: 'V', Coen: 'M', James: 'M', Izzy: 'S' }, wissels: ['Giulio', 'Bastiaan'] },
+      { posities: { Abel: 'K', Giulio: 'V', Bastiaan: 'V', Noud: 'M', Bram: 'M', Coen: 'S' }, wissels: ['James', 'Izzy'] },
+      { posities: { Noud: 'K', James: 'V', Izzy: 'V', Giulio: 'M', Bastiaan: 'M', Abel: 'S' }, wissels: ['Bram', 'Coen'] },
+      { posities: { Noud: 'K', Bram: 'V', Coen: 'V', James: 'M', Abel: 'M', Izzy: 'S' }, wissels: ['Giulio', 'Bastiaan'] },
+    ],
+  }, extra);
+}
+
+test('formatie: formationOf leest formatie-veld, format.formation of leidt af uit de opstelling', () => {
+  assert.deepEqual(IO.formationOf(match221()), { K: 1, V: 2, M: 2, S: 1 });
+  assert.deepEqual(IO.formationOf(match221({ formatie: undefined })), { K: 1, V: 2, M: 2, S: 1 });
+  assert.deepEqual(IO.formationOf(match221({ formatie: undefined, format: undefined })), { K: 1, V: 2, M: 2, S: 1 });
+  assert.deepEqual(IO.formationOf(match()), { K: 1, V: 2, M: 1, S: 2 });
+  // oud record met 5 spelers (2-1-1) zonder veld → standaard 2-1-2 (v1-kolommen blijven gelijk)
+  assert.deepEqual(IO.formationOf({ periodes: [{ posities: { A: 'K', B: 'V', C: 'V', D: 'M', E: 'S' } }] }), { K: 1, V: 2, M: 1, S: 2 });
+});
+
+test('formatie: Excel-kopregel per wedstrijd (2-1-2 exact v1, 2-2-1 gegenereerd) en round-trip van beide', () => {
+  const a = match();                       // 2-1-2, 11 okt
+  const b = match221();                    // 2-2-1, 1 nov
+  const rows = IO.buildSchemaRows([b, a], { settings: { minutes: 50 } });
+  assert.deepEqual(rows[1], HDR);
+  const i = rows.findIndex((r, k) => k > 1 && r[0] === 'JO10 vs RKSV (🏠 Thuis)');
+  assert.deepEqual(rows[i + 1], HDR_221);
+  assert.deepEqual(rows[i + 2], ['0-12.5', 'Abel', 'Noud', 'Bram', 'Coen', 'James', 'Izzy', 'Giulio', 'Bastiaan']);
+
+  const { matches, warnings } = IO.parseRows(rows, SQUAD);
+  assert.deepEqual(warnings, []);
+  assert.equal(matches.length, 2);
+  const [x, y] = matches;
+  assert.deepEqual(x.periodes, a.periodes);
+  assert.equal(x.formatie, undefined, '2-1-2 import blijft zonder extra veld');
+  assert.deepEqual(y.periodes, b.periodes);
+  assert.equal(y.formatie, '2-2-1');
+  assert.deepEqual(y.format, { formation: { K: 1, V: 2, M: 2, S: 1 } });
+  assert.deepEqual(y.keepers, ['Abel', 'Abel', 'Noud', 'Noud']);
+});
+
+test('formatie: alleen 2-1-2-wedstrijden → Excel exact als voorheen (v1-formaat)', () => {
+  const rows = IO.buildSchemaRows([match({ formatie: '2-1-2' })], { settings: { minutes: 50 } });
+  assert.deepEqual(rows[1], HDR);
+  assert.equal(rows[1].length, 9);
+});
+
+test('formatie: WhatsApp en PNG voor 2-2-1', () => {
+  const m = match221();
+  m.periodes = m.periodes.slice(0, 1);
+  const txt = IO.whatsappText(m, { settings: { minutes: 50 } });
+  assert.equal(txt, [
+    '⚽ JO10 – RKSV (🏠 thuis) za 01-11',
+    'Formatie 2-2-1 (keeper, 2 verd., 2 midden, 1 spits)',
+    '',
+    '*Periode 1* (0–50 min)',
+    '🧤 Abel',
+    '🛡️ Noud, Bram',
+    '⚙️ Coen, James',
+    '⚡ Izzy',
+    '🪑 Giulio, Bastiaan',
+  ].join('\n'));
+  // 2-1-2 krijgt geen formatieregel (ongewijzigde tekst)
+  assert.ok(!IO.whatsappText(match(), {}).includes('Formatie'));
+
+  const L = IO.pngLayout(match221(), { settings: { minutes: 50 } });
+  assert.deepEqual(L.formation, { K: 1, V: 2, M: 2, S: 1 });
+  assert.equal(L.header.subtitle, '🏠 Thuis  ·  za 1 nov 2025  ·  Formatie 2-2-1');
+  L.cells.forEach(c => {
+    const of = code => c.chips.filter(ch => ch.code === code);
+    assert.equal(of('M').length, 2);
+    assert.equal(of('S').length, 1);
+    assert.ok(Math.abs(of('S')[0].cx - (c.pitch.x + c.pitch.w / 2)) < 0.01, 'enkele spits in het midden');
+    assert.ok(of('S')[0].cy < Math.min(...of('M').map(ch => ch.cy)));
+    c.chips.forEach(ch => assert.ok(ch.cx - ch.maxW / 2 >= c.pitch.x - 0.01 && ch.cx + ch.maxW / 2 <= c.pitch.x + c.pitch.w + 0.01));
+  });
+});
