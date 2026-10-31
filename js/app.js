@@ -343,6 +343,9 @@
     return JSON.stringify(sig);
   }
   const draftFormation = d => formationById(d.formatie || DEFAULT_FORMATIE());
+  // Formatie waarmee het huidige schema gemaakt is (uit de opstelling zelf), zodat de eerlijkheidsscore klopt
+  // ook als de trainer net een andere formatie koos en nog niet op "Werk bij" tikte.
+  const schemaFormation = d => (d.periodes ? matchFormation({ periodes: d.periodes }) : draftFormation(d));
   function isStale(d) { return !!(d.periodes && d.sig !== sigOf(d)); }
   function hasUnsaved(d) { return !!(d && d.periodes && d.dirty); }
   function keepersValid(d) { return d.keepers.length === d.periods && d.keepers.every(k => k && d.aanwezig.includes(k)); }
@@ -1022,7 +1025,7 @@
     const f = modFn('Scheduler', 'evaluate');
     let ev = null;
     if (f) {
-      try { ev = f(clone(d.periodes), { players: d.aanwezig.slice(), keepers: d.keepers.slice(), history: historyExcl(d.savedId), squad: St.getSquad(), formation: draftFormation(d) }); }
+      try { ev = f(clone(d.periodes), { players: d.aanwezig.slice(), keepers: d.keepers.slice(), history: historyExcl(d.savedId), squad: St.getSquad(), formation: schemaFormation(d) }); }
       catch (e) { reportError(e, 'Controle van het schema mislukte.'); }
     }
     ev = ev && typeof ev === 'object' ? ev : {};
