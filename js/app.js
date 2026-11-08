@@ -648,6 +648,7 @@
         <header class="period__head"><span class="period__title">Periode ${p + 1}</span><span class="period__time">${esc(o.times[p] || '')}</span></header>
         <div class="pitch"><div class="pitch__lines" aria-hidden="true"><i class="pl-mid"></i><i class="pl-circle"></i><i class="pl-box pl-box--top"></i><i class="pl-box pl-box--bot"></i></div>${rows}</div>
         <div class="bench"><span class="bench__label">🪑 Wissel</span><div class="bench__chips">${bench}</div></div>
+        ${o.board != null && p < periodes.length - 1 ? boardLinkHTML(periodes, p, o.board) : ''}
       </article>`;
     }).join('');
     const dots = periodes.length > 1 ? `<div class="carousel-dots" aria-hidden="true">${periodes.map((_, i) => `<span class="dot${i === 0 ? ' is-on' : ''}"></span>`).join('')}</div>` : '';
@@ -676,7 +677,65 @@
     }).join('');
     return `<div class="table-wrap"><table class="sched">
       <thead><tr><th scope="col" class="sched__name">Speler</th>${head}<th scope="col" title="Periodes in het veld"><span aria-hidden="true">⚽</span><span class="sr-only">Veld</span></th><th scope="col" title="Periodes wissel"><span aria-hidden="true">🪑</span><span class="sr-only">Wissel</span></th></tr></thead>
-      <tbody>${rows}</tbody></table></div>`;
+      <tbody>${rows}</tbody></table></div>${o.board != null && periodes.length > 1 ? boardStripHTML(periodes, o.board) : ''}`;
+  }
+
+  // ── Wisselborden: wie gaat eruit, wie komt erin tussen twee periodes ──
+  // src = 'draft' (schema in de maak) of het id van een opgeslagen wedstrijd.
+  function boardDiff(periodes, i) {
+    const f = modFn('Live', 'diffPeriods');
+    if (!f || !periodes[i] || !periodes[i + 1]) return null;
+    try { return f(periodes[i], periodes[i + 1]); } catch (e) { console.warn('[JO10] diffPeriods', e); return null; }
+  }
+  function boardSummary(diff) {
+    if (!diff) return '';
+    if (diff.none) return 'geen wissels';
+    const n = diff.swaps.length, m = diff.moves.length;
+    return [n ? `${n} wissel${n === 1 ? '' : 's'}` : '', m ? `${m} andere positie${m === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
+  }
+  function boardLinkHTML(periodes, p, src) {
+    const diff = boardDiff(periodes, p);
+    return `<button type="button" class="board-link" data-act="board" data-src="${esc(src)}" data-i="${p}">
+      <span class="board-link__icon" aria-hidden="true">🔁</span><span class="board-link__txt"><b>Wisselbord P${p + 1} → P${p + 2}</b><small>${esc(boardSummary(diff))}</small></span><span aria-hidden="true">›</span></button>`;
+  }
+  function boardStripHTML(periodes, src) {
+    return `<div class="board-strip" role="group" aria-label="Wisselborden">${periodes.slice(0, -1).map((_, p) => {
+      const diff = boardDiff(periodes, p);
+      return `<button type="button" class="board-chip" data-act="board" data-src="${esc(src)}" data-i="${p}">🔁 P${p + 1}→P${p + 2}<small>${esc(boardSummary(diff))}</small></button>`;
+    }).join('')}</div>`;
+  }
+  function boardPeriodes(src) {
+    if (src === 'draft') return S.draft && S.draft.periodes;
+    const m = findMatch(src); return m && m.periodes;
+  }
+  function openBoard(src, i) {
+    const periodes = boardPeriodes(src);
+    if (!periodes || !periodes[i + 1]) { toast('Dit wisselbord is niet meer beschikbaar.', 'warn'); closeSheet(true); return; }
+    const diff = boardDiff(periodes, i);
+    if (!diff) { reportError(new Error('diffPeriods ontbreekt'), 'Wisselbord kon niet gemaakt worden.'); return; }
+    const m = src === 'draft' ? null : findMatch(src);
+    const minutes = (m ? settingsFor(m) : settings()).minutes || 50;
+    const at = String(Math.round(minutes / periodes.length * (i + 1) * 10) / 10).replace('.', ',');
+    const pos = c => `<span class="sb-pos" style="--pc:${esc(POS(c).color)}">${esc(POS(c).label)}</span>`;
+    const rows = diff.swaps.map(sw => `<li class="sb-row">
+        <span class="sb-off">${sw.off ? `<span class="sb-arrow sb-arrow--off" aria-hidden="true">▼</span>${esc(sw.off)}` : '<span class="sb-empty">—</span>'}</span>
+        <span class="sb-swap" aria-hidden="true">⇄</span>
+        <span class="sb-on">${sw.on ? `<span class="sb-arrow sb-arrow--on" aria-hidden="true">▲</span>${esc(sw.on)}` : '<span class="sb-empty">—</span>'}</span>
+        ${sw.pos ? pos(sw.pos) : ''}
+        <span class="sr-only">${esc(sw.off && sw.on ? `${sw.off} eruit, ${sw.on} erin als ${POS(sw.pos).label}` : sw.on ? `${sw.on} erin` : `${sw.off} eruit`)}</span></li>`).join('');
+    const moves = diff.moves.map(mv => `<li class="sb-move"><b>${esc(mv.name)}</b><span>${esc(POS(mv.from).label)} → ${esc(POS(mv.to).label)}</span></li>`).join('');
+    const nav = (j, label) => (j >= 0 && j < periodes.length - 1)
+      ? `<button type="button" class="btn btn--secondary" data-act="board" data-src="${esc(src)}" data-i="${j}">${label}</button>` : '';
+    openSheet({
+      title: `🔁 Wisselbord P${i + 1} → P${i + 2}`,
+      className: 'sheet--board',
+      body: `<div class="sboard" aria-live="polite">
+          <div class="sboard__head"><span class="sboard__label">WISSEL</span><span class="sboard__when">na ${esc(at)} min</span></div>
+          ${diff.swaps.length ? `<ul class="sboard__rows">${rows}</ul>` : '<p class="sboard__none">Geen wissels — iedereen blijft staan.</p>'}
+        </div>
+        ${moves ? `<h3 class="sb-sub">Andere positie</h3><ul class="sb-moves">${moves}</ul>` : ''}`,
+      actions: `${nav(i - 1, `‹ P${i}→P${i + 1}`)}${nav(i + 1, `P${i + 2}→P${i + 3} ›`)}<button type="button" class="btn btn--primary" data-act="sheet-close">Klaar</button>`,
+    });
   }
   function legendHTML() {
     return `<div class="legend" aria-label="Legenda">${EDIT_CODES.map(c => `<span class="legend__item"><span class="pb pb--${c} pb--mini">${esc(POS(c).short || c)}</span>${esc(POS(c).label)}</span>`).join('')}</div>`;
@@ -1070,7 +1129,7 @@
     const ev = evaluateDraft(d);
     const warnings = uniq(ev.warnings.concat(S.genWarnings || []));
     const times = periodTimes(d.periods, settings().minutes);
-    const o = { editable: true, locks: d.locks, sel: S.sel, order: d.aanwezig, times, key: 'editor' };
+    const o = { editable: true, locks: d.locks, sel: S.sel, order: d.aanwezig, times, key: 'editor', board: 'draft' };
     el.innerHTML = `<div class="card__head"><h2 class="card__title"><span class="step-num" aria-hidden="true">4</span> Wisselschema</h2>${viewToggleHTML(S.view, 'view')}</div>
       ${stale ? `<div class="note note--warn stale">Aanwezigheid, keepers of formatie zijn gewijzigd. <button type="button" class="btn btn--primary btn--sm" data-act="generate">⚡ Werk bij</button></div>` : ''}
       ${fairHTML(ev.score)}
@@ -1636,7 +1695,7 @@
     const st = settingsFor(m);
     const times = periodTimes(m.periodes.length, st.minutes);
     const order = Array.isArray(m.aanwezig) && m.aanwezig.length ? m.aanwezig : St.getSquad().players.map(p => p.name);
-    const o = { editable: false, locks: [], sel: null, order, times, key: 'detail-' + m.id };
+    const o = { editable: false, locks: [], sel: null, order, times, key: 'detail-' + m.id, board: m.id };
     const goals = (Array.isArray(m.goals) ? m.goals : []).filter(Boolean);
     const view = S.view;
     el.innerHTML = `<div class="container">
@@ -2034,6 +2093,7 @@
     'import-confirm': () => confirmImport(),
     'export-season': () => shareExcel(St.getMatches()),
     'trash-restore': ds => restoreTrash(ds.id),
+    board: ds => openBoard(ds.src, +ds.i),
     'fx-use': ds => { const f = fxById(ds.id); if (!f) return; fxApplyToDraft(S.draft, f); changed(); renderInfo(); renderActions(); renderProgress(); toast(`${fxShort(f)} overgenomen`, 'success', { ms: 1600 }); },
     'fx-plan': ds => fxPlan(ds.id),
     'fx-all': () => { S.fxAll = !S.fxAll; renderSeizoen(); },
