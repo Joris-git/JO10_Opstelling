@@ -917,3 +917,19 @@ a.mrow { color: inherit; text-decoration: none; }
 .invite-url { margin: 12px 0; padding: 10px 12px; border-radius: 10px; background: var(--bg2); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85rem; overflow-wrap: anywhere; }
 .sheet--me .opt { min-height: 56px; }
 .tr-me { margin-top: 12px; }
+
+/* ══ Context: welke wedstrijd staat open ═════════════════════════════ */
+.ctx {
+  display: flex; align-items: center; gap: 12px; margin-bottom: 12px; padding: 10px 12px;
+  border-radius: 12px; background: var(--card); border: 1px solid var(--border); box-shadow: var(--shadow);
+}
+.ctx__main { flex: 1; min-width: 0; display: grid; line-height: 1.3; }
+.ctx__main small { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; color: var(--muted); }
+.ctx__main b { font-size: 1.05rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ctx__main span { font-size: 0.82rem; color: var(--muted); }
+.ctx .btn { flex: none; min-height: 44px; }
+.ctx--past { background: var(--warn-bg); border-color: var(--warn-border); }
+.ctx--past .ctx__main small, .ctx--past .ctx__main span { color: var(--warn-text); }
+.ctx--warn { display: block; background: var(--warn-bg); border-color: var(--warn-border); color: var(--warn-text); }
+.ctx--warn p { margin: 0 0 10px; }
+.ctx--warn .btn-row { display: flex; flex-wrap: wrap; gap: 8px; }

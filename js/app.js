@@ -718,6 +718,7 @@
       if (prev === 'wedstrijd') S.sel = null;
       closeSheet(false);
     }
+    if (screen === 'wedstrijd' && prev !== 'wedstrijd') closeOldDraft();
     S.screen = screen;
     if (screen === 'live' && params.matchId != null) { if (!sameId(S.liveMatchId, params.matchId)) unmountLive(); S.liveMatchId = params.matchId; }
     if (screen === 'seizoen' && 'matchId' in params) S.season.detailId = params.matchId;
@@ -1468,10 +1469,77 @@
   // ═══════════════════════════════════════════════════════════════════
   // Scherm: Wedstrijd
   // ═══════════════════════════════════════════════════════════════════
+  // ── Oude wedstrijd niet per ongeluk voortzetten ──────────────────────
+  // Een concept met een datum in het verleden wordt bij het openen van het Wedstrijd-scherm vervangen door de
+  // volgende wedstrijd (er gaat niets verloren: opgeslagen blijft opgeslagen, "Terug" zet hem terug). Heeft het oude
+  // concept niet-opgeslagen wijzigingen, dan beslist de trainer (banner). Expliciet geopend via Seizoen → "Bewerk
+  // opstelling" = vastgepind (pinnedUntil) en blijft staan.
+  const PIN_MS = 6 * 3600 * 1000;
+  const draftIsPast = d => !!(d && d.datum && d.datum < todayISO());
+  const draftIsPinned = d => !!(d && +d.pinnedUntil > Date.now());
+  const draftHasContent = d => !!(d && (d.periodes || d.savedId != null || (d.tegenstander || '').trim()));
+  function draftForNext() {
+    const f = Cal.fixtures.length ? fxFn('next', [Cal.fixtures], null) : null;
+    if (!f) return { d: newDraft(), f: null };
+    const existing = fxFn('matchFor', [f, St.getMatches()], null);
+    if (existing && existing.periodes && existing.periodes.length) return { d: draftFromMatch(existing), f };
+    const d = newDraft(); fxApplyToDraft(d, f); return { d, f };
+  }
+  function draftLabel(d) {
+    const who = (d.tegenstander || '').trim() || 'zonder tegenstander';
+    return `${who} (${fmtDate(d.datum, { weekday: 'short', day: 'numeric', month: 'short' })})`;
+  }
+  // Geeft true als het concept vervangen is.
+  function closeOldDraft(opts) {
+    opts = opts || {};
+    const d = S.draft;
+    if (!draftIsPast(d) || draftIsPinned(d) || !draftHasContent(d)) return false;
+    if (hasUnsaved(d) && !opts.force) return false;      // banner in renderContext laat de trainer kiezen
+    const old = clone(d);
+    const { d: next, f } = draftForNext();
+    S.draft = next; S.undo = []; S.sel = null; S.genWarnings = []; S.carouselX = {};
+    persistDraft(true);
+    if (!opts.silent) {
+      toast(`${draftLabel(old)} gesloten${f ? ` · klaar voor ${fxShort(f)}` : ''}`, 'info', {
+        ms: 6000,
+        action: { label: 'Terug', fn: () => { S.draft = Object.assign(old, { pinnedUntil: Date.now() + PIN_MS }); persistDraft(true); if (S.screen === 'wedstrijd') renderWedstrijd(); } },
+      });
+    }
+    return true;
+  }
+  async function discardOldDraft() {
+    const ok = await confirmDialog({ title: 'Oude opstelling weggooien?', message: `De niet-opgeslagen wijzigingen van ${draftLabel(S.draft)} gaan verloren.`, ok: 'Weggooien', danger: true });
+    if (!ok) return;
+    closeOldDraft({ force: true, silent: true });
+    renderWedstrijd(); root.scrollTo(0, 0);
+    toast('Klaar voor de volgende wedstrijd', 'success');
+  }
+  function renderContext() {
+    const el = $('#w-context'); if (!el) return;
+    const d = S.draft;
+    if (!draftHasContent(d)) { el.innerHTML = ''; return; }
+    const past = draftIsPast(d), today = d.datum === todayISO();
+    const days = Math.round((parseISO(d.datum) - parseISO(todayISO())) / 86400000);
+    const when = today ? 'Vandaag' : past ? 'Gespeeld' : days === 1 ? 'Morgen' : `Over ${days} dagen`;
+    const status = d.savedId != null ? (d.dirty ? 'gewijzigd, nog niet opgeslagen' : 'opgeslagen') : d.periodes ? 'concept, nog niet opgeslagen' : 'nieuwe opstelling';
+    if (past && hasUnsaved(d) && !draftIsPinned(d)) {
+      el.innerHTML = `<div class="ctx ctx--warn" role="status"><p><b>Dit is een oude opstelling:</b> ${esc(draftLabel(d))}, ${esc(status)}.</p>
+        <div class="btn-row"><button type="button" class="btn btn--secondary btn--sm" data-act="ctx-save-old">💾 Eerst opslaan</button>
+        <button type="button" class="btn btn--primary btn--sm" data-act="ctx-discard-old">Volgende wedstrijd</button></div></div>`;
+      return;
+    }
+    el.innerHTML = `<div class="ctx${past ? ' ctx--past' : ''}">
+      <span class="ctx__main"><small>${past ? 'Je bewerkt een gespeelde wedstrijd' : 'Je bereidt voor'}</small>
+        <b>${d.thuisUit === 'uit' ? '✈️' : '🏠'} ${esc((d.tegenstander || '').trim() || 'Nieuwe wedstrijd')}</b>
+        <span>${esc(fmtDate(d.datum, { weekday: 'short', day: 'numeric', month: 'short' }))} · ${esc(when)} · ${esc(status)}</span></span>
+      ${past ? '<button type="button" class="btn btn--primary btn--sm" data-act="ctx-close">Sluiten</button>' : '<button type="button" class="btn btn--ghost btn--sm" data-act="new-match">＋ Nieuw</button>'}</div>`;
+  }
+
   function renderWedstrijd() {
     const el = screenEl('wedstrijd');
     el.innerHTML = `<nav class="progress" id="w-progress" aria-label="Voortgang"></nav>
       <div class="container">
+        <div id="w-context"></div>
         <div id="w-conflict" aria-live="polite" hidden></div>
         <div class="card" id="w-info"></div>
         <div class="card" id="w-aanwezig"></div>
@@ -1480,9 +1548,10 @@
         <div class="card card--schema" id="w-schema" hidden></div>
         <div class="card" id="w-actions" hidden></div>
       </div>`;
-    renderConflict(); renderInfo(); renderAanwezig(); renderKeepers(); renderGenerate(); renderSchema(); renderActions(); renderProgress();
+    renderContext(); renderConflict(); renderInfo(); renderAanwezig(); renderKeepers(); renderGenerate(); renderSchema(); renderActions(); renderProgress();
   }
   function renderProgress() {
+    renderContext();
     const el = $('#w-progress'); if (!el) return;
     const d = S.draft;
     const steps = [
@@ -1999,7 +2068,9 @@
       const ok = await confirmDialog({ title: 'Nieuwe wedstrijd?', message: 'Je huidige schema is nog niet opgeslagen. Weggooien en opnieuw beginnen?', ok: 'Ja, nieuwe wedstrijd', danger: true });
       if (!ok) return;
     }
-    S.draft = newDraft(); S.undo = []; S.sel = null; S.genWarnings = []; S.carouselX = {};
+    const nx = draftForNext();
+    const same = nx.d.savedId != null && sameId(nx.d.savedId, S.draft.savedId);
+    S.draft = same ? newDraft() : nx.d; S.undo = []; S.sel = null; S.genWarnings = []; S.carouselX = {};
     persistDraft(true);
     renderWedstrijd();
     root.scrollTo(0, 0);
@@ -2351,6 +2422,7 @@
       if (!ok) return;
     }
     S.draft = draftFromMatch(m); S.undo = []; S.sel = null; S.genWarnings = []; S.carouselX = {};
+    S.draft.pinnedUntil = Date.now() + PIN_MS;   // bewust geopend: niet automatisch sluiten
     persistDraft(true);
     go('wedstrijd', { top: true });
     setTimeout(() => scrollIntoView($('#w-schema')), 40);
@@ -2671,6 +2743,14 @@
     'share-xlsx': () => { const m = S.shareMatch; closeSheet(true); if (m) shareExcel([m]); },
     'start-live': () => startLiveFromDraft(),
     'new-match': () => newMatch(),
+    'ctx-close': async () => {
+      const d = S.draft;
+      if (hasUnsaved(d)) { const ok = await confirmDialog({ title: 'Sluiten zonder opslaan?', message: `De wijzigingen in ${draftLabel(d)} zijn nog niet opgeslagen.`, ok: 'Sluiten', danger: true }); if (!ok) return; }
+      d.pinnedUntil = 0; closeOldDraft({ force: true });
+      renderWedstrijd(); root.scrollTo(0, 0);
+    },
+    'ctx-discard-old': () => discardOldDraft(),
+    'ctx-save-old': async () => { S.draft.pinnedUntil = Date.now() + PIN_MS; persistDraft(true); renderWedstrijd(); await doSave(); },
     'score-clear': ds => clearScore(ds.id),
     'open-match': ds => { S.season.detailId = ds.id; S.scroll.seizoenList = root.scrollY; renderSeizoen(); root.scrollTo(0, 0); },
     'close-detail': () => { S.season.detailId = null; renderSeizoen(); root.scrollTo(0, S.scroll.seizoenList || 0); },
