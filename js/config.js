@@ -116,6 +116,7 @@
     LS_CALENDAR: 'jo10_calendar_v2',
     LS_FORMATION: 'jo10_formatie_v2',             // laatst gekozen formatie (standaard voor een nieuwe wedstrijd)
     LS_ME: 'jo10_me_v2',                           // naam van de trainer op dit toestel ("Wie ben jij?")
+    LS_TOUR: 'jo10_rondleiding_v1',                // rondleiding gezien / hint weggeklikt (tijdstempel) — zie js/tour.js
 
     // Trainers (in jo10_squad.trainers). Iedereen met de app-link ziet en bewerkt dezelfde gegevens;
     // de naam is alleen voor "door Mark · 10:32" en meldingen als een andere trainer iets wijzigt.
