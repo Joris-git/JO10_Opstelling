@@ -20,12 +20,13 @@ Primair gebruik: **telefoon langs de lijn** (iPhone Safari), soms desktop.
 | `js/live.js` + `css/live.css` | Live-wedstrijdmodus (klok, wissels, score) | `JO10.Live` |
 | `js/fixtures.js` | Speelkalender: iCal (.ics) ontleden, thuis/uit bepalen, koppelen aan wedstrijden | `JO10.Fixtures` |
 | `data/kalender.ics` | Officiële iCal van de clubsite (wedstrijden + trainingen), dagelijks (20:00) bijgewerkt door `.github/workflows/kalender.yml` | |
+| `js/tour.js` + `css/tour.css` | Rondleiding door de app (7 veegbare kaartjes) + pure beslislogica wanneer tonen | `JO10.Tour` |
 | `js/app.js` + `css/app.css` | UI-shell, schermen, state, rendering | `JO10.App` |
 | `test/*.test.js` | `node --test test/*.test.js` — unit tests voor scheduler/store/io-logica | |
 
 Elk JS-bestand is een IIFE: `(function(root){ const JO10 = root.JO10 = root.JO10 || {}; ... })(typeof window!=='undefined'?window:globalThis);`
 en exporteert via `module.exports` als `module` bestaat (voor Node-tests). Laadvolgorde in `index.html`:
-config → scheduler → store → io → fixtures → live → app.
+config → scheduler → store → io → fixtures → live → tour → app.
 
 ## Datamodel (compatibel met v1 — NIET breken)
 
@@ -167,6 +168,23 @@ bestaande trainer of typ een naam; Team → Trainers om te wijzigen). Team → T
   (`draft.dirty`) en een andere opstelling op de server → banner "Mark heeft deze opstelling intussen gewijzigd" met
   "Laad versie van Mark" / "Mijn versie houden". Opslaan terwijl de opstelling elders gewijzigd is → bevestigen.
 - Nieuwe wedstrijd opslaan terwijl er al één is met dezelfde datum en tegenstander → bevestigen (geen dubbele).
+
+### Rondleiding (`JO10.Tour`)
+Schermvullende, veegbare kaartjes (scroll-snap, Volgende/Terug, stipjes, "Overslaan", laatste kaart "Aan de slag" +
+"Tweede trainer uitnodigen"); `role="dialog"`, focus-trap, Escape = overslaan, pijltjestoetsen, rest van de pagina `inert`,
+respecteert `prefers-reduced-motion`. Illustraties zijn HTML/CSS in de stijl van de app (chips, mini-veld, wisselbord, klok),
+met echte spelersnamen/volgende wedstrijd als die er zijn (altijd ge-escaped).
+```js
+decide({ seen, hasMatches, hasMe, usedBefore, liveRunning }) → 'tour'|'hint'|'none'   // puur, getest
+readLocal(storage, cfg) → { seen, hasMatches, hasMe, usedBefore }   // lezen vóór Store.init
+markSeen() / isSeen() ; open({ name, players, next, team, onClose(reason), onInvite }) ; close() ; isOpen()
+```
+- Vlag: localStorage `jo10_rondleiding_v1` (`Config.LS_TOUR`), gezet bij openen of bij wegklikken van de hint.
+- Nieuw toestel → rondleiding automatisch, **daarna** pas "Wie ben jij?" (dan is de trainerslijst intussen gesynct).
+  Nooit automatisch als er een live-wedstrijd loopt.
+- Bestaande gebruiker (wedstrijden in de lokale cache, naam gezet of v2 eerder geopend) → geen automatische rondleiding,
+  wel eenmalig wegklikbaar kaartje "Nieuw: rondleiding door de app" op Start.
+- Opnieuw bekijken: Team → ❓ Hulp → "❓ Rondleiding", of de link onderaan Start (`App.tour()`).
 
 ### Speelkalender
 Bron: `Config.CALENDAR_URL`, de VoetbalAssist-iCal van team O10-3 op de clubsite. Die bevat wedstrijden

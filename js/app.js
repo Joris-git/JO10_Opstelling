@@ -387,6 +387,7 @@
     prevMatches: null,     // laatst geziene wedstrijden (meldingen bij wijzigingen van andere trainers)
     editTrainer: null,     // trainer-bewerken in Team
     askMe: false,          // "Wie ben jij?" nog tonen zodra dat kan
+    tourHint: false,       // kaartje "Nieuw: rondleiding" op Start (bestaande gebruiker, nog niet gezien)
   };
 
   function saveUI() {
@@ -1192,10 +1193,12 @@
       <div class="page-head home-head"><h1 class="page-title">${name ? `Hoi ${esc(name)} 👋` : 'Welkom 👋'}</h1>
         <p class="hint">${esc(C().CALENDAR_TEAM || TEAM())}</p></div>
       ${liveCardHTML()}
+      ${tourHintHTML()}
       ${up.length ? nextCardHTML(up[0], ms) : noFixtureCardHTML()}
       ${laterHTML(up.slice(1, 4), ms)}
       ${playedHTML(ms)}
       ${trainersCardHTML()}
+      ${tourMod() ? '<p class="tour-link"><button type="button" class="link-btn" data-act="tour-open">🧭 Rondleiding door de app</button></p>' : ''}
     </div>`;
   }
   async function homeNew() {
@@ -1258,8 +1261,64 @@
   }
   // Na het opstarten één keer vragen (niet tijdens live, niet over een ander venster heen)
   function maybeAskMe() {
-    if (!S.askMe || me() || sheetState || S.screen === 'live') return;
+    if (!S.askMe || me() || sheetState || tourIsOpen() || S.screen === 'live') return;
     askWhoAmI();
+  }
+  // "Wie ben jij?": even wachten op de trainerslijst van de server (max ~4 s), dan vragen.
+  function scheduleAskMe() {
+    if (me() || sessionGet('jo10_me_later') === '1') return;
+    const t0 = Date.now();
+    const tryAsk = () => {
+      if (me()) return;
+      if (St.getStatus() === 'synced' || trainerList().length || Date.now() - t0 > 4000) { S.askMe = true; maybeAskMe(); }
+      else setTimeout(tryAsk, 250);
+    };
+    setTimeout(tryAsk, 300);
+  }
+
+  // ── Rondleiding (js/tour.js) ───────────────────────────────────────
+  // Nieuw toestel: eerst de rondleiding, daarna "Wie ben jij?" (dan is de trainerslijst intussen van de server binnen).
+  const tourMod = () => (JO10.Tour && typeof JO10.Tour.open === 'function' ? JO10.Tour : null);
+  const tourIsOpen = () => { const t = tourMod(); return !!(t && t.isOpen()); };
+  function tourNext() {
+    try {
+      const f = upcomingFixtures(St.getMatches())[0]; if (!f) return null;
+      const days = daysUntil(f.datum);
+      return {
+        tegenstander: fxShort(f), thuisUit: f.thuisUit,
+        when: `${fmtDate(f.datum, { weekday: 'long', day: 'numeric', month: 'long' })}${f.tijd ? ` · ${f.tijd}` : ''}`,
+        chip: days === 0 ? 'Vandaag' : days === 1 ? 'Morgen' : days != null && days > 1 ? `Over ${days} dagen` : '',
+      };
+    } catch (e) { return null; }
+  }
+  function openTour(o) {
+    o = o || {};
+    const T = tourMod();
+    if (!T) { toast('De rondleiding kon niet geladen worden. Herlaad de pagina.', 'warn'); return; }
+    closeSheet(true);
+    T.markSeen();
+    if (S.tourHint) { S.tourHint = false; if (S.screen === 'start') renderStart(); }
+    T.open({
+      name: me(), players: St.activePlayers(), next: tourNext(), team: TEAM(), appName: C().APP_NAME || 'JO10 Opstelling',
+      onInvite: () => openInvite(),
+      onClose: () => { if (o.auto) scheduleAskMe(); },
+    });
+  }
+  function dismissTourHint() {
+    const T = tourMod();
+    if (T) T.markSeen(); else lsSet(C().LS_TOUR || 'jo10_rondleiding_v1', String(Date.now()));
+    S.tourHint = false;
+    if (S.screen === 'start') renderStart();
+    toast('De rondleiding vind je altijd onderaan Start en bij 👥 Team.', 'info', { ms: 3200 });
+  }
+  function tourHintHTML() {
+    if (!S.tourHint || !tourMod()) return '';
+    return `<section class="card tour-hint" aria-labelledby="tour-hint-title">
+      <span class="tour-hint__icon" aria-hidden="true">🧭</span>
+      <span class="tour-hint__txt"><b id="tour-hint-title">Nieuw: rondleiding door de app</b><small>In een minuutje alle handige functies op een rij.</small></span>
+      <button type="button" class="icon-btn" data-act="tour-hint-close" aria-label="Melding over de rondleiding sluiten">✕</button>
+      <button type="button" class="btn btn--primary btn--block" data-act="tour-open">🧭 Bekijk de rondleiding</button>
+    </section>`;
   }
 
   // Team → Trainers
@@ -2357,7 +2416,9 @@
         ${trashHTML()}
       </div>
       ${calTeamHTML()}
-      <div class="card"><details class="explain"><summary>🤝 Hoe werkt het eerlijk verdelen?</summary>
+      <div class="card"><h2 class="card__title">❓ Hulp</h2>
+        ${tourMod() ? '<button type="button" class="btn btn--secondary btn--block" data-act="tour-open">❓ Rondleiding</button><p class="hint">De belangrijkste functies in 7 korte kaartjes.</p>' : ''}
+        <details class="explain"><summary>🤝 Hoe werkt het eerlijk verdelen?</summary>
         <ul>
           <li><b>Iedereen evenveel spelen.</b> Wie vaker wissel was (deze wedstrijd én dit seizoen), is nu minder vaak wissel.</li>
           <li><b>Nooit twee keer achter elkaar wissel</b>, en de keeper is niet wissel in de periodes dat hij keept.</li>
@@ -2644,6 +2705,8 @@
     'tr-me': () => { const t = S.editTrainer; if (t) pickMe(t.name); },
     'tr-delete': () => deleteTrainer(),
     invite: () => openInvite(),
+    'tour-open': () => openTour(),
+    'tour-hint-close': () => dismissTourHint(),
     'invite-share': () => inviteShare(),
     'invite-wa': () => inviteWhatsapp(),
     'invite-copy': () => inviteCopy(),
@@ -2777,6 +2840,8 @@
     applyPosColors();
     applyTheme(currentTheme(), false);
     bindEvents();
+    // Rondleiding: kijken wat dit toestel al kent vóórdat de Store gegevens van de server binnenhaalt
+    const tourLocal = tourMod() ? (() => { try { return JO10.Tour.readLocal(); } catch (e) { return null; } })() : null;
     const ui = lsJSON(UI_KEY) || {};
     S.view = ui.view === 'tabel' ? 'tabel' : 'veld';
     S.liveMatchId = ui.liveMatchId != null ? ui.liveMatchId : null;
@@ -2799,19 +2864,14 @@
     let start = 'start';
     if (liveRunningId() != null) start = 'live';
     else if (sameSession && SCREENS.includes(ui.screen)) start = ui.screen;
+    // Nieuw toestel → rondleiding (niet over een lopende live-wedstrijd); bestaande gebruiker → hint op Start.
+    const tourWhat = tourLocal ? JO10.Tour.decide(Object.assign({}, tourLocal, { liveRunning: liveRunningId() != null })) : 'none';
+    S.tourHint = tourWhat === 'hint';
     S.screen = null;
     go(start);
     root.scrollTo(0, 0);
-    // "Wie ben jij?": even wachten op de trainerslijst van de server (max ~4 s), dan vragen.
-    if (!me() && sessionGet('jo10_me_later') !== '1') {
-      const t0 = Date.now();
-      const tryAsk = () => {
-        if (me()) return;
-        if (St.getStatus() === 'synced' || trainerList().length || Date.now() - t0 > 4000) { S.askMe = true; maybeAskMe(); }
-        else setTimeout(tryAsk, 250);
-      };
-      setTimeout(tryAsk, 300);
-    }
+    if (tourWhat === 'tour') openTour({ auto: true });
+    else scheduleAskMe();
     // Speelkalender op de achtergrond verversen (cache is al direct zichtbaar)
     setTimeout(() => { calRefresh(false).catch(e => console.warn('[JO10] kalender', e)); loadMaterial(); }, 400);
   }
@@ -2821,6 +2881,7 @@
     toast: (msg, type, opts) => toast(msg, type, opts),
     confirm: o => confirmDialog(o || {}),
     render: () => rerender(),
+    tour: () => openTour(),
     get state() { return S; },
     _esc: esc,
   };
