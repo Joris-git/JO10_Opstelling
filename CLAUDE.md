@@ -157,6 +157,15 @@ Owner van de DOM-shell en navigatie. Schermen (tabbalk, 5 tabs): `start` (🏠 S
 - Opstarten: nieuwe sessie (sessionStorage `jo10_session_v2` leeg) → Start, of Live als daar een wedstrijd loopt; herladen in
   dezelfde sessie → laatste scherm (`jo10_ui_v2`).
 
+### Oude wedstrijd niet per ongeluk voortzetten
+Bovenaan het Wedstrijd-scherm staat een contextbalk (`#w-context`): welke wedstrijd je voorbereidt, datum, status
+(opgeslagen / concept / gewijzigd). Opent de trainer het Wedstrijd-scherm terwijl het concept een datum in het verleden heeft,
+dan wordt het vervangen door de **volgende kalenderwedstrijd** (bestaande opstelling daarvoor wordt geladen, anders een nieuw
+concept met tegenstander/datum/thuis-uit) met toast "PVC (za 31 okt) gesloten · klaar voor Maarssen" en knop **Terug**.
+Niet-opgeslagen oud concept → banner met "Eerst opslaan" / "Volgende wedstrijd" (nooit stil weggooien). Bewust geopend via
+Seizoen → "Bewerk opstelling" = vastgepind (`draft.pinnedUntil`, 6 uur) met gele balk "Je bewerkt een gespeelde wedstrijd" +
+**Sluiten**. "＋ Nieuw" start bij de volgende kalenderwedstrijd.
+
 ### Twee trainers (samen coachen)
 Geen accounts: iedereen met de app-link deelt dezelfde gegevens. Per toestel vraagt de app één keer "Wie ben jij?" (kies een
 bestaande trainer of typ een naam; Team → Trainers om te wijzigen). Team → Trainers: lijst, rol, toevoegen/verwijderen en
