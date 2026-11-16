@@ -837,6 +837,120 @@ test('S8: v1 verwijdert terwijl v2 offline dezelfde match bewerkt → lokale bew
   assert.equal(Store.getStatus(), 'synced');
 });
 
+// ── tweede trainer: trainers, toeschrijving, wijzigingen van anderen ──────────
+test('normalizeSquad: trainers blijven bewaard, rollen genormaliseerd, ongeldige/dubbele namen weg', () => {
+  const sq = Store.normalizeSquad({
+    players: [{ name: 'Noud' }],
+    trainers: [{ name: ' Joris ', role: 'Hoofdtrainer' }, 'Mark', { name: 'mark' }, { name: 'Ki.m' }, { name: '' }, { name: 'Sam', role: 'baas', extra: 1 }],
+  });
+  assert.deepEqual(sq.trainers, [{ name: 'Joris', role: 'hoofdtrainer' }, { name: 'Mark', role: 'trainer' }, { name: 'Kim', role: 'trainer' }, { name: 'Sam', role: 'trainer', extra: 1 }]);
+  assert.equal('trainers' in Store.normalizeSquad({ players: [], trainers: [] }), false, 'lege lijst → veld weg (Firebase bewaart geen lege arrays)');
+  assert.equal('trainers' in Store.normalizeSquad({ players: [] }), false);
+  // Firebase-object i.p.v. array
+  assert.deepEqual(Store.normalizeSquad({ players: [], trainers: { 0: { name: 'Joris', role: 'hoofdtrainer' } } }).trainers, [{ name: 'Joris', role: 'hoofdtrainer' }]);
+});
+
+test('normalizeMatch: createdBy/updatedBy/createdAt blijven bewaard; leeg/null → weg', () => {
+  const m = Store.normalizeMatch(mk(1, '2026-11-21', { createdBy: 'Joris', updatedBy: ' Mark ', createdAt: '1700000000000' }));
+  assert.equal(m.createdBy, 'Joris');
+  assert.equal(m.updatedBy, 'Mark');
+  assert.equal(m.createdAt, 1700000000000);
+  const n = Store.normalizeMatch(mk(1, '2026-11-21', { updatedBy: null, createdBy: '' }));
+  assert.equal('updatedBy' in n, false);
+  assert.equal('createdBy' in n, false);
+});
+
+test('getMe/setMe: naam per toestel, gevalideerd zoals spelersnamen', async () => {
+  const ls = setup();
+  assert.equal(Store.getMe(), '');
+  assert.equal(Store.setMe('Jo/ris'), 'Naam mag geen . # $ / [ ] bevatten');
+  assert.equal(Store.getMe(), '');
+  assert.equal(Store.setMe('  Joris  '), null);
+  assert.equal(Store.getMe(), 'Joris');
+  assert.equal(ls.data[Config.LS_ME], 'Joris');
+  assert.equal(Store.setMe(''), null);
+  assert.equal(Store.getMe(), '');
+});
+
+test('saveMatch: createdBy alleen bij aanmaken, updatedBy = trainer van dit toestel', async () => {
+  const fb = makeFakeFirebase({ initial: { jo10_matches: [mk(1, '2025-09-01')] } });
+  setup({ firebase: fb });
+  Store.setMe('Joris');
+  await Store.init({}); await settle();
+  const a = await Store.saveMatch(mk(2, '2026-11-21'));
+  assert.equal(a.createdBy, 'Joris');
+  assert.equal(a.updatedBy, 'Joris');
+  assert.ok(a.createdAt > 0);
+  await settle();
+  // tweede trainer op een ander toestel wijzigt dezelfde wedstrijd
+  Store.setMe('Mark');
+  const b = await Store.saveMatch(Object.assign({}, Store.getMatches().find(m => m.id === 2), { score: { home: 2, away: 1 } }));
+  assert.equal(b.createdBy, 'Joris', 'createdBy blijft');
+  assert.equal(b.updatedBy, 'Mark');
+  assert.equal(b.createdAt, a.createdAt);
+  await settle();
+  const srv = fb.server.jo10_matches.find(r => r.id === 2);
+  assert.equal(srv.createdBy, 'Joris');
+  assert.equal(srv.updatedBy, 'Mark');
+  // bestaande (v1-)wedstrijd zonder createdBy krijgt die niet achteraf
+  const c = await Store.saveMatch(Store.getMatches().find(m => m.id === 1));
+  assert.equal('createdBy' in c, false);
+  assert.equal(c.updatedBy, 'Mark');
+  // zonder naam: updatedBy niet laten staan van de vorige trainer
+  Store.setMe('');
+  const d = await Store.saveMatch(Store.getMatches().find(m => m.id === 2));
+  assert.equal('updatedBy' in d, false);
+  await settle();
+  assert.equal('updatedBy' in fb.server.jo10_matches.find(r => r.id === 2), false);
+  assert.equal(fb.server.jo10_matches.find(r => r.id === 2).createdBy, 'Joris');
+});
+
+test('addTrainer vóór de selectie van de server binnen is: lokaal tonen, daarna samenvoegen zonder spelers te overschrijven', async () => {
+  const remoteSquad = { players: [{ name: 'Echt1' }, { name: 'Echt2' }], settings: { periods: 4, minutes: 50 }, trainers: [{ name: 'Joris', role: 'hoofdtrainer' }] };
+  const fb = makeFakeFirebase({ initial: { jo10_squad: remoteSquad }, connected: false });
+  setup({ firebase: fb });
+  await Store.init({}); await settle();
+  await Store.addTrainer({ name: 'Mark' });
+  assert.deepEqual(Store.getSquad().trainers.map(t => t.name), ['Mark'], 'lokaal zichtbaar');
+  assert.equal(fb.log.sets.length, 0, 'nog niets naar de server');
+  fb.setConnected(true); await settle(10);
+  const srv = fb.server.jo10_squad;
+  assert.deepEqual(srv.players.map(p => p.name), ['Echt1', 'Echt2'], 'echte selectie niet overschreven');
+  assert.deepEqual(srv.trainers.map(t => t.name), ['Joris', 'Mark']);
+  assert.deepEqual(Store.getSquad().trainers.map(t => t.name), ['Joris', 'Mark']);
+  assert.deepEqual(Store._state().meta.pendingTrainers, []);
+  // nogmaals dezelfde naam (andere hoofdletters): geen dubbele
+  await Store.addTrainer('mark'); await settle();
+  assert.deepEqual(fb.server.jo10_squad.trainers.map(t => t.name), ['Joris', 'Mark']);
+  await assert.rejects(Store.addTrainer('Ma$rk'), /\$/);
+});
+
+test('lineupSig: uitslag en doelpunten tellen niet mee, opstelling wel', () => {
+  const a = mk(1, '2026-11-21');
+  assert.equal(Store.lineupSig(a), Store.lineupSig(Object.assign({}, a, { score: { home: 3, away: 0 }, goals: [{ team: 'home' }], updatedAt: 5 })));
+  const b = clone(a); b.periodes[0].posities = { Abel: 'V', Noud: 'K', Bram: 'V', Coen: 'M', James: 'S', Izzy: 'S' };
+  assert.notEqual(Store.lineupSig(a), Store.lineupSig(b));
+});
+
+test('diffByOthers: nieuw, opstelling, uitslag, verwijderd; eigen wijzigingen en v1-bewerkingen', () => {
+  const base = [mk(1, '2026-11-14', { updatedAt: 10, updatedBy: 'Joris' }), mk(2, '2026-11-21', { updatedAt: 10, updatedBy: 'Joris' }), mk(3, '2026-11-28', { updatedAt: 10 })];
+  const next = clone(base);
+  next[0].score = { home: 1, away: 1 }; next[0].updatedAt = 20; next[0].updatedBy = 'Mark';
+  next[1].periodes[0].wissels = ['Bastiaan', 'Giulio']; next[1].updatedAt = 30; next[1].updatedBy = 'joris';   // eigen naam → telt niet
+  next.splice(2, 1);
+  next.push(mk(4, '2026-12-05', { createdBy: 'Mark', updatedBy: 'Mark', updatedAt: 40 }));
+  const d = Store.diffByOthers(base, next, 'Joris');
+  assert.deepEqual(d.map(x => [x.kind, x.id, x.by]), [['score', 1, 'Mark'], ['new', 4, 'Mark'], ['deleted', 3, null]]);
+  // opstelling gewijzigd door Mark
+  const n2 = clone(base); n2[1].periodes[0].posities.Noud = 'M'; n2[1].periodes[0].posities.Coen = 'V'; n2[1].updatedAt = 50; n2[1].updatedBy = 'Mark';
+  assert.deepEqual(Store.diffByOthers(base, n2, 'Joris').map(x => [x.kind, x.by, x.match.tegenstander]), [['lineup', 'Mark', 'Team2']]);
+  // v1 wijzigt zonder updatedAt bij te werken → oude updatedBy niet gebruiken
+  const n3 = clone(base); n3[1].periodes[0].wissels = ['Bastiaan']; n3[1].periodes[0].posities.Giulio = 'S'; delete n3[1].periodes[0].posities.Izzy; n3[1].periodes[0].wissels.push('Izzy');
+  assert.deepEqual(Store.diffByOthers(base, n3, 'Mark').map(x => [x.kind, x.by]), [['lineup', null]]);
+  // niets gewijzigd
+  assert.deepEqual(Store.diffByOthers(base, clone(base), 'Joris'), []);
+});
+
 test('geen unhandled rejections in de hele suite', async () => {
   await settle();
   assert.equal(unhandled.length, 0, String(unhandled[0]));

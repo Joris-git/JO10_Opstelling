@@ -115,6 +115,12 @@
     LS_LIVE: 'jo10_live_v2',
     LS_CALENDAR: 'jo10_calendar_v2',
     LS_FORMATION: 'jo10_formatie_v2',             // laatst gekozen formatie (standaard voor een nieuwe wedstrijd)
+    LS_ME: 'jo10_me_v2',                           // naam van de trainer op dit toestel ("Wie ben jij?")
+
+    // Trainers (in jo10_squad.trainers). Iedereen met de app-link ziet en bewerkt dezelfde gegevens;
+    // de naam is alleen voor "door Mark · 10:32" en meldingen als een andere trainer iets wijzigt.
+    TRAINER_ROLES: { hoofdtrainer: 'Hoofdtrainer', trainer: 'Trainer' },
+    MAX_TRAINERS: 20,
 
     // Speelkalender: officiële iCal van de clubsite. Een GitHub Action zet die dagelijks in CALENDAR_FILE
     // (zelfde site als de app → geen CORS). CALENDAR_URL is de bron (en reserve voor direct ophalen).
