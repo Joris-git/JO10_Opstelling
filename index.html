@@ -69,7 +69,8 @@
   </header>
 
   <main id="main" class="app-main" tabindex="-1">
-    <section id="screen-wedstrijd" class="screen" data-screen="wedstrijd" aria-label="Wedstrijd voorbereiden"><div class="container"><p class="boot-msg">Laden…</p></div></section>
+    <section id="screen-start" class="screen" data-screen="start" aria-label="Start"><div class="container"><p class="boot-msg">Laden…</p></div></section>
+    <section id="screen-wedstrijd" class="screen" data-screen="wedstrijd" aria-label="Wedstrijd voorbereiden" hidden></section>
     <section id="screen-live" class="screen" data-screen="live" aria-label="Live" hidden></section>
     <section id="screen-seizoen" class="screen" data-screen="seizoen" aria-label="Seizoen" hidden></section>
     <section id="screen-team" class="screen" data-screen="team" aria-label="Team" hidden></section>
@@ -77,7 +78,8 @@
   </main>
 
   <nav class="tabbar" aria-label="Hoofdmenu">
-    <button type="button" class="tab" data-act="go" data-screen="wedstrijd" aria-current="page"><span class="tab__icon" aria-hidden="true">⚽</span><span class="tab__label">Wedstrijd</span></button>
+    <button type="button" class="tab" data-act="go" data-screen="start" aria-current="page"><span class="tab__icon" aria-hidden="true">🏠</span><span class="tab__label">Start</span></button>
+    <button type="button" class="tab" data-act="go" data-screen="wedstrijd"><span class="tab__icon" aria-hidden="true">⚽</span><span class="tab__label">Wedstrijd</span></button>
     <button type="button" class="tab" data-act="go" data-screen="live"><span class="tab__icon" aria-hidden="true">⏱️</span><span class="tab__label">Live</span></button>
     <button type="button" class="tab" data-act="go" data-screen="seizoen"><span class="tab__icon" aria-hidden="true">📊</span><span class="tab__label">Seizoen</span></button>
     <button type="button" class="tab" data-act="go" data-screen="team"><span class="tab__icon" aria-hidden="true">👥</span><span class="tab__label">Team</span></button>

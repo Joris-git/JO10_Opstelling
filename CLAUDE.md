@@ -50,8 +50,13 @@ Match = {
   updatedAt: number,
   formatie: '2-1-2' | '2-2-1',              // formatie van deze wedstrijd ('V-M-S'); ontbreekt → afleiden uit posities
   format: { formation: { K, V, M, S } },     // zelfde formatie als object (voor de Sporting-app)
+  createdBy: string,          // trainer die de wedstrijd aanmaakte (alleen bij aanmaken gezet; oude records: ontbreekt)
+  createdAt: number,          // tijdstip van aanmaken
+  updatedBy: string,          // trainer die laatst opsloeg (Store.saveMatch zet dit; zonder naam → veld weg)
 }
 ```
+`createdBy`/`updatedBy` zet `Store.saveMatch` zelf uit `Store.getMe()`. v1.html werkt `updatedAt`/`updatedBy` niet bij: een
+naam telt daarom alleen als `updatedAt` echt nieuwer is (`Store.diffByOthers`).
 
 Oude records kunnen `subs` i.p.v. `wissels` hebben en `score` kan `undefined` zijn — altijd defensief lezen
 (`Store.normalizeMatch` doet dit).
@@ -61,14 +66,20 @@ Firebase-pad `jo10_squad` (nieuw) en localStorage `jo10_squad_v2`:
 Squad = {
   players: [ { name: string, active: boolean, avoid: ['K'|'V'|'M'|'S'], aliases: [string] } ],
   settings: { periods: number /*4*/, minutes: number /*50*/ },
+  trainers: [ { name: string, role: 'hoofdtrainer' | 'trainer' } ],   // optioneel; namen als spelersnamen (geen . # $ / [ ], ≤ 40)
   updatedAt: number,
 }
 ```
 `avoid` = posities die deze speler liever niet speelt (bv. Bastiaan: `['S']`; `'K'` = niet als keeper voorstellen).
 Als `jo10_squad` niet bestaat of niet leesbaar/schrijfbaar is (database-rules!) → `Config.DEFAULT_SQUAD`/lokale kopie gebruiken.
+Trainer van dít toestel ("Wie ben jij?"): localStorage `jo10_me_v2` (`Config.LS_ME`), via `Store.getMe()/setMe()`.
+`Store.addTrainer()` voegt een trainer toe; is `jo10_squad` nog niet van de server gelezen, dan wordt hij pas samengevoegd
+en verstuurd als die binnen is (meta `pendingTrainers`), zodat een nieuw toestel nooit de echte selectie overschrijft.
 
 Draft (alleen lokaal, `jo10_draft_v2`): de wedstrijd die je nu aan het voorbereiden bent, zodat niets verloren
-gaat bij herladen: `{ datum, tegenstander, thuisUit, aanwezig, keepers, periodes, locks, seed, savedId, formatie }`.
+gaat bij herladen: `{ datum, tegenstander, thuisUit, aanwezig, keepers, periodes, locks, seed, savedId, formatie,
+baseUpdatedAt, baseSig }`. `baseUpdatedAt`/`baseSig` (= `Store.lineupSig`) = versie van de opgeslagen wedstrijd waarop het
+concept gebaseerd is (conflictcontrole, zie "Twee trainers").
 Laatst gekozen formatie (standaard voor een nieuwe wedstrijd): localStorage `jo10_formatie_v2`.
 
 ## API-contracten
@@ -110,6 +121,10 @@ getStatus() → 'offline'|'syncing'|'synced'|'error' ; onStatus(cb)
 normalizeMatch(raw) → Match
 getTrash() → [{ match, removedAt, reason }]   // lokaal vangnet: wedstrijden die door sync/verwijderen verdwenen
 restoreFromTrash(id) → Promise<Match>        // zet terug (als nieuwe put)
+getMe() → naam|'' ; setMe(naam) → NL-foutmelding|null      // trainer van dit toestel (jo10_me_v2)
+addTrainer({ name, role }) → Promise<Squad>                // zie Squad.trainers
+lineupSig(match) → string                                  // opstelling zonder uitslag/doelpunten/tijdstempels
+diffByOthers(prevMatches, nextMatches, me) → [{ kind: 'new'|'lineup'|'score'|'other'|'deleted', id, by, match }]
 ```
 Spelersnamen mogen geen `. # $ / [ ]` bevatten (Firebase-sleutels); Store/UI valideren dit.
 Een wedstrijd zonder periodes wordt niet naar Firebase geschreven (v1 crasht op lege `periodes`).
@@ -134,8 +149,24 @@ Live-state (klok, huidige periode, start-tijdstempel) staat in localStorage `jo1
 scherm vergrendelen de klok niet reset (rekenen met `Date.now()`, niet met tellers).
 
 ### `JO10.App`
-Owner van de DOM-shell en navigatie. Schermen: `wedstrijd` (voorbereiden), `live`, `seizoen`, `team`.
-`App.go(screen, params)`; `App.toast(msg, type)`.
+Owner van de DOM-shell en navigatie. Schermen (tabbalk, 5 tabs): `start` (🏠 Start), `wedstrijd` (voorbereiden), `live`,
+`seizoen`, `team`. `App.go(screen, params)`; `App.toast(msg, type)`.
+- **Start** (standaard eerste scherm): kaart "Volgende wedstrijd" (eerstvolgende kalenderwedstrijd; status: opstelling klaar ·
+  door X → Bekijk schema / Start live, concept in bewerking → Verder, of Maak opstelling), "Daarna" (2–3 wedstrijden +
+  volgende training), laatste 5 gespeelde wedstrijden, trainers ("Samen coachen").
+- Opstarten: nieuwe sessie (sessionStorage `jo10_session_v2` leeg) → Start, of Live als daar een wedstrijd loopt; herladen in
+  dezelfde sessie → laatste scherm (`jo10_ui_v2`).
+
+### Twee trainers (samen coachen)
+Geen accounts: iedereen met de app-link deelt dezelfde gegevens. Per toestel vraagt de app één keer "Wie ben jij?" (kies een
+bestaande trainer of typ een naam; Team → Trainers om te wijzigen). Team → Trainers: lijst, rol, toevoegen/verwijderen en
+"📲 Tweede trainer uitnodigen" (app-URL delen via deelmenu, WhatsApp of kopiëren).
+- Toeschrijving "door Mark · 10:32" in wedstrijdrijen, detail, Start en editor.
+- Remote wijziging (Store `onChange`) → `Store.diffByOthers` → toast ("Mark heeft de opstelling tegen PVC aangepast").
+- Editor met een opgeslagen wedstrijd: zonder eigen wijzigingen volgt het concept de nieuwste versie; met eigen wijzigingen
+  (`draft.dirty`) en een andere opstelling op de server → banner "Mark heeft deze opstelling intussen gewijzigd" met
+  "Laad versie van Mark" / "Mijn versie houden". Opslaan terwijl de opstelling elders gewijzigd is → bevestigen.
+- Nieuwe wedstrijd opslaan terwijl er al één is met dezelfde datum en tegenstander → bevestigen (geen dubbele).
 
 ### Speelkalender
 Bron: `Config.CALENDAR_URL`, de VoetbalAssist-iCal van team O10-3 op de clubsite. Die bevat wedstrijden

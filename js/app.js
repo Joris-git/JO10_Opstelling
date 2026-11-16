@@ -11,8 +11,9 @@
   // ═══════════════════════════════════════════════════════════════════
   // Constanten & config
   // ═══════════════════════════════════════════════════════════════════
-  const SCREENS = ['wedstrijd', 'live', 'seizoen', 'team'];
+  const SCREENS = ['start', 'wedstrijd', 'live', 'seizoen', 'team'];
   const UI_KEY = 'jo10_ui_v2';           // alleen UI-voorkeuren (laatste tab, weergave, live-wedstrijd)
+  const SESSION_KEY = 'jo10_session_v2'; // sessionStorage: zelfde sessie (herladen) → laatste scherm; nieuw geopend → Start
   const PITCH_ROWS = ['S', 'M', 'V', 'K']; // van boven (aanval) naar onder (keeper)
   const EDIT_CODES = ['K', 'V', 'M', 'S', 'W'];
   const FIELD = ['K', 'V', 'M', 'S'];
@@ -46,7 +47,8 @@
       return Array.from({ length: periods }, (_, i) => `${f(i * len)}–${f((i + 1) * len)} min`);
     },
     LS_MATCHES: 'jo10_matches_v1', LS_SQUAD: 'jo10_squad_v2', LS_DRAFT: 'jo10_draft_v2', LS_THEME: 'jo10_theme', LS_LIVE: 'jo10_live_v2',
-    LS_FORMATION: 'jo10_formatie_v2',
+    LS_FORMATION: 'jo10_formatie_v2', LS_ME: 'jo10_me_v2',
+    TRAINER_ROLES: { hoofdtrainer: 'Hoofdtrainer', trainer: 'Trainer' },
   };
   const C = () => JO10.Config || FALLBACK_CFG;
   const POS = code => ((C().POSITIONS || FALLBACK_CFG.POSITIONS)[code]) || { code, label: code, icon: '', color: '#94a3b8' };
@@ -171,7 +173,10 @@
     const settings = Object.assign({ periods: 4, minutes: 50 }, def.settings || {}, sq.settings || {});
     settings.periods = [2, 4].includes(+settings.periods) ? +settings.periods : 4;
     settings.minutes = clamp(+settings.minutes || 50, 10, 120);
-    return Object.assign({}, sq, { players, settings });
+    const trainers = (Array.isArray(sq.trainers) ? sq.trainers : []).filter(t => t && t.name).map(t => ({
+      name: String(t.name), role: t.role === 'hoofdtrainer' ? 'hoofdtrainer' : 'trainer',
+    }));
+    return Object.assign({}, sq, { players, settings, trainers });
   }
   const byDate = (a, b) => String(a.datum || '').localeCompare(String(b.datum || '')) || (+a.id || 0) - (+b.id || 0);
   function codeOf(per, name) {
@@ -246,7 +251,9 @@
     },
     async saveMatch(m) {
       const f = modFn('Store', 'saveMatch');
-      if (f) return f(m);
+      // Store schrijft lokaal synchroon: meteen als "gezien" markeren, zodat de echo van de server
+      // niet als wijziging van een andere trainer gemeld wordt.
+      if (f) { const p = f(m); markSeen(); return p; }
       const list = Local.matches(); const rec = Object.assign({}, m, { updatedAt: Date.now() });
       const i = list.findIndex(x => sameId(x.id, m.id));
       if (i >= 0) list[i] = rec; else list.push(rec);
@@ -254,7 +261,7 @@
     },
     async deleteMatch(id) {
       const f = modFn('Store', 'deleteMatch');
-      if (f) return f(id);
+      if (f) { const p = f(id); markSeen(); return p; }
       Local.writeMatches(Local.matches().filter(x => !sameId(x.id, id)));
     },
     async saveSquad(sq) {
@@ -311,6 +318,54 @@
   }
 
   // ═══════════════════════════════════════════════════════════════════
+  // Trainers: wie ben ik op dit toestel, wie heeft wat gewijzigd
+  // ═══════════════════════════════════════════════════════════════════
+  function me() {
+    const v = St.run('getMe', [], () => lsGet(C().LS_ME || FALLBACK_CFG.LS_ME) || '');
+    return typeof v === 'string' ? v : '';
+  }
+  const isMe = n => !!n && !!me() && nameKey(n) === nameKey(me());
+  const trainerList = () => St.getSquad().trainers || [];
+  const ROLE_LABEL = r => ((C().TRAINER_ROLES || FALLBACK_CFG.TRAINER_ROLES)[r]) || 'Trainer';
+  // Naam na "door": "Mark", of "jou" als het de trainer van dit toestel is
+  const whoName = n => (n ? (isMe(n) ? 'jou' : n) : '');
+  // Tijdstip kort: "10:32", "gisteren 10:32", "za 21 nov 10:32"
+  function whenTxt(ts) {
+    const t = +ts; if (!t) return '';
+    const d = new Date(t); if (isNaN(d)) return '';
+    const time = d.toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' });
+    const iso = isoOf(d); const today = todayISO();
+    const y = new Date(); y.setDate(y.getDate() - 1);
+    if (iso === today) return time;
+    if (iso === isoOf(y)) return `gisteren ${time}`;
+    return `${fmtDate(iso, { weekday: 'short', day: 'numeric', month: 'short' })} ${time}`;
+  }
+  // Kort, voor lijsten: "door Mark · 10:32" (leeg als niemand bekend is)
+  function byShort(m) {
+    const by = m && (m.updatedBy || m.createdBy);
+    if (!by) return '';
+    const w = whenTxt(m.updatedAt);
+    return `door ${whoName(by)}${w ? ` · ${w}` : ''}`;
+  }
+  // Lang, voor detail en editor
+  function byLong(m) {
+    if (!m) return '';
+    const c = m.createdBy, u = m.updatedBy, w = whenTxt(m.updatedAt);
+    if (c && u && nameKey(c) !== nameKey(u)) return `Gemaakt door ${whoName(c)} · laatst gewijzigd door ${whoName(u)}${w ? ` · ${w}` : ''}`;
+    if (c || u) return `${c ? 'Gemaakt' : 'Laatst gewijzigd'} door ${whoName(c || u)}${w ? ` · ${w}` : ''}`;
+    return w ? `Laatst opgeslagen ${w}` : '';
+  }
+  const capFirst = t => (t ? t.charAt(0).toUpperCase() + t.slice(1) : t);
+  // Handtekening van de opstelling zonder uitslag (Store.lineupSig), voor conflictdetectie
+  function lineupSig(m) {
+    const f = modFn('Store', 'lineupSig');
+    if (f) { try { return f(m); } catch (e) { console.warn(e); } }
+    return JSON.stringify([m.datum, m.tegenstander, m.thuisUit, m.aanwezig, m.keepers, m.formatie, m.periodes]);
+  }
+  // Laatst geziene toestand van alle wedstrijden (om wijzigingen van andere trainers te herkennen)
+  function markSeen() { try { S.prevMatches = St.getMatches(); } catch (e) { /* */ } }
+
+  // ═══════════════════════════════════════════════════════════════════
   // State
   // ═══════════════════════════════════════════════════════════════════
   const S = {
@@ -329,6 +384,9 @@
     edit: null,            // speler-bewerken in Team
     pendingImport: null,
     shareMatch: null,
+    prevMatches: null,     // laatst geziene wedstrijden (meldingen bij wijzigingen van andere trainers)
+    editTrainer: null,     // trainer-bewerken in Team
+    askMe: false,          // "Wie ben jij?" nog tonen zodra dat kan
   };
 
   function saveUI() {
@@ -358,6 +416,7 @@
       seed: randSeed(), savedId: null, formatie: lastFormatie(),
       // UI-extra's (lokaal concept, niet in Match)
       periods: st.periods, guests: [], sameKeeper: false, keepersAuto: true, dirty: false, sig: null,
+      baseUpdatedAt: null, baseSig: null,   // versie van de opgeslagen wedstrijd waar dit concept op gebaseerd is
     };
     autoKeepers(d);
     return d;
@@ -380,13 +439,18 @@
     d.keepers = Array.isArray(d.keepers) ? d.keepers.slice(0, d.periods) : [];
     while (d.keepers.length < d.periods) d.keepers.push('');
     if (d.savedId != null && !findMatch(d.savedId)) { d.savedId = null; if (d.periodes) d.dirty = true; }
+    if (d.savedId != null && d.baseUpdatedAt == null) {   // concept van vóór de conflictcontrole
+      const cur = findMatch(d.savedId);
+      d.baseUpdatedAt = +cur.updatedAt || 0; d.baseSig = lineupSig(cur);
+    }
     if (d.periodes && !d.sig) d.sig = sigOf(d);
     if (!d.periodes && d.keepersAuto) autoKeepers(d);
     return d;
   }
   function newDraftShell(st) {
     return { datum: todayISO(), tegenstander: '', thuisUit: 'thuis', aanwezig: [], keepers: [], periodes: null, locks: [],
-      seed: randSeed(), savedId: null, formatie: lastFormatie(), periods: st.periods, guests: [], sameKeeper: false, keepersAuto: true, dirty: false, sig: null };
+      seed: randSeed(), savedId: null, formatie: lastFormatie(), periods: st.periods, guests: [], sameKeeper: false, keepersAuto: true, dirty: false, sig: null,
+      baseUpdatedAt: null, baseSig: null };
   }
   function draftFromMatch(m) {
     const periodes = (m.periodes || []).map(normPeriod);
@@ -402,6 +466,7 @@
       formatie: formatieId(matchFormation(m)),
       periods: periodes.length || settings().periods, guests: aanwezig.filter(n => !squadNames.has(n)),
       sameKeeper: keepers.length > 1 && keepers.every(k => k && k === keepers[0]), keepersAuto: false, dirty: false, sig: null,
+      baseUpdatedAt: +m.updatedAt || 0, baseSig: lineupSig(m),
     };
     d.sig = sigOf(d);
     return d;
@@ -414,6 +479,57 @@
     if (now) write(); else draftTimer = setTimeout(write, 250);
   }
   function changed() { if (S.draft.periodes) S.draft.dirty = true; persistDraft(); }
+
+  // ── Samenwerken: is de opgeslagen wedstrijd van dit concept intussen elders gewijzigd? ──
+  // Alleen de opstelling telt (uitslag/doelpunten neemt buildMatch toch uit de actuele versie over).
+  function remoteConflict(d) {
+    if (!d || d.savedId == null || !d.periodes || d.baseUpdatedAt == null) return null;
+    const cur = findMatch(d.savedId); if (!cur) return null;
+    if ((+cur.updatedAt || 0) <= (+d.baseUpdatedAt || 0)) return null;
+    if (d.baseSig && lineupSig(cur) === d.baseSig) return null;
+    return { match: cur, by: cur.updatedBy || null, at: cur.updatedAt };
+  }
+  // Na een remote wijziging: zonder eigen wijzigingen volgt het concept gewoon de nieuwste versie.
+  // → 'reloaded' | 'conflict' | null
+  function followRemote() {
+    const d = S.draft; const c = remoteConflict(d);
+    if (!c) return null;
+    if (hasUnsaved(d)) return 'conflict';
+    S.draft = draftFromMatch(c.match); S.undo = []; S.sel = null; S.genWarnings = [];
+    persistDraft(true);
+    return 'reloaded';
+  }
+  const conflictWho = c => (c.by ? (isMe(c.by) ? 'Jij (op een ander toestel)' : c.by) : 'Een andere trainer');
+  function conflictHTML() {
+    const c = remoteConflict(S.draft);
+    if (!c || !hasUnsaved(S.draft)) return '';
+    const who = conflictWho(c);
+    const w = whenTxt(c.at);
+    return `<div class="conflict" role="alert">
+      <p class="conflict__msg"><span aria-hidden="true">⚠️</span> <span><b>${esc(who)}</b> ${who.startsWith('Jij') ? 'hebt' : 'heeft'} deze opstelling intussen gewijzigd${w ? ` (${esc(w)})` : ''}. Jij hebt wijzigingen die nog niet zijn opgeslagen.</span></p>
+      <div class="conflict__btns">
+        <button type="button" class="btn btn--primary btn--sm" data-act="conflict-load">${c.by && !isMe(c.by) ? `Laad versie van ${esc(c.by)}` : 'Laad nieuwe versie'}</button>
+        <button type="button" class="btn btn--secondary btn--sm" data-act="conflict-keep">Mijn versie houden</button></div></div>`;
+  }
+  function renderConflict() {
+    const el = $('#w-conflict'); if (!el) return;
+    const h = conflictHTML();
+    el.innerHTML = h; el.hidden = !h;
+  }
+  function conflictLoad() {
+    const c = remoteConflict(S.draft);
+    if (!c) { renderConflict(); return; }
+    S.draft = draftFromMatch(c.match); S.undo = []; S.sel = null; S.genWarnings = []; S.carouselX = {};
+    persistDraft(true);
+    renderWedstrijd();
+    toast(`Versie van ${c.by && !isMe(c.by) ? c.by : 'het andere toestel'} geladen`, 'success');
+  }
+  function conflictKeep() {
+    const c = remoteConflict(S.draft);
+    if (c) { S.draft.baseUpdatedAt = +c.at || Date.now(); S.draft.baseSig = lineupSig(c.match); persistDraft(true); }
+    renderConflict();
+    toast('Je houdt je eigen versie. Bij opslaan overschrijf je de andere.', 'info', { ms: 3500 });
+  }
 
   // ── Keepers ────────────────────────────────────────────────────────
   // Aantal periodes op doel dit seizoen (zelfde maat als Scheduler.suggestKeepers gebruikt).
@@ -593,7 +709,7 @@
   function screenEl(name) { return doc.getElementById(`screen-${name}`); }
   function go(screen, params) {
     params = params || {};
-    if (!SCREENS.includes(screen)) screen = 'wedstrijd';
+    if (!SCREENS.includes(screen)) screen = 'start';
     const prev = S.screen;
     if (prev !== screen) {
       S.scroll[prev] = root.scrollY || 0;
@@ -611,11 +727,12 @@
     setSelbar();
     saveUI();
     if (prev !== screen || params.top) root.scrollTo(0, params.top ? 0 : (S.scroll[screen] || 0));
+    if (S.askMe) setTimeout(maybeAskMe, 0);
   }
   function renderScreen(name) {
     const el = screenEl(name); if (!el) return;
     try {
-      ({ wedstrijd: renderWedstrijd, live: renderLive, seizoen: renderSeizoen, team: renderTeam })[name]();
+      ({ start: renderStart, wedstrijd: renderWedstrijd, live: renderLive, seizoen: renderSeizoen, team: renderTeam })[name]();
     } catch (e) {
       reportError(e, 'Dit scherm kon niet getekend worden.');
       el.innerHTML = `<div class="container"><div class="card empty"><div class="empty__icon" aria-hidden="true">😕</div>
@@ -792,7 +909,8 @@
     return r;
   }
   async function calRefresh(manual) {
-    if (!JO10.Fixtures || Cal.loading || typeof root.fetch !== 'function') return;
+    if (!JO10.Fixtures || typeof root.fetch !== 'function') { Cal.tried = true; return; }
+    if (Cal.loading) return;
     // Een eigen geïmporteerd bestand niet stil overschrijven; handmatig vernieuwen mag wel.
     if (!manual && Cal.source === 'file' && Cal.fixtures.length) return;
     Cal.loading = true;
@@ -812,13 +930,14 @@
         if (rr.ok) r = rr; else err = rr.warnings[0] || 'Geen wedstrijden gevonden';
       } catch (e) { err = e && e.message || String(e); }
     }
-    Cal.loading = false; Cal.error = r ? '' : err;
+    Cal.loading = false; Cal.tried = true; Cal.error = r ? '' : err;
     if (manual) toast(r ? `📅 Kalender bijgewerkt: ${r.fixtures.length} wedstrijden, ${r.trainings.length} trainingen` : 'Kalender ophalen lukte niet. Importeer het .ics-bestand, of probeer het later nog eens.', r ? 'success' : 'warn', { ms: 4000 });
     if (r || manual) calRerender();
   }
   function calRerender() {
     if (!S.ready || sheetState) return;
     if (S.screen === 'wedstrijd') { if (!isTyping()) renderInfo(); }
+    else if (S.screen === 'start') renderStart();
     else if (S.screen === 'seizoen') renderSeizoen();
     else if (S.screen === 'team') { if (!isTyping()) renderTeam(); }
   }
@@ -917,12 +1036,384 @@
   }
 
   // ═══════════════════════════════════════════════════════════════════
+  // Scherm: Start (eerste scherm: volgende wedstrijd, uitslagen, trainers)
+  // ═══════════════════════════════════════════════════════════════════
+  // Wedstrijd die live loopt (klok niet afgerond), of null
+  function liveRunningId() {
+    if (S.liveMatchId == null || !findMatch(S.liveMatchId)) return null;
+    const all = lsJSON(C().LS_LIVE || FALLBACK_CFG.LS_LIVE) || {};
+    const st = all[String(S.liveMatchId)];
+    return st && st.finished ? null : S.liveMatchId;
+  }
+  function daysUntil(iso) {
+    const d = parseISO(iso), t = parseISO(todayISO());
+    return d && t ? Math.round((d - t) / 864e5) : null;
+  }
+  // Komende wedstrijden uit de kalender; een wedstrijd van vandaag met uitslag is al gespeeld.
+  function upcomingFixtures(ms) {
+    const today = todayISO();
+    return fxFn('upcoming', [Cal.fixtures], []).filter(f => {
+      if (f.datum !== today) return true;
+      const m = fxFn('matchFor', [f, ms], null);
+      return !(m && m.score);
+    });
+  }
+  // Is het (niet opgeslagen) concept voor deze kalenderwedstrijd?
+  function draftForFixture(f) {
+    const d = S.draft;
+    if (!d || d.savedId != null || d.datum !== f.datum) return false;
+    if (!d.periodes && !d.tegenstander.trim()) return false;
+    return !d.tegenstander.trim() || sameOpp(d.tegenstander, fxShort(f)) || sameOpp(d.tegenstander, f.tegenstander);
+  }
+  function homeStatusHTML(icon, title, sub, mod) {
+    return `<div class="home-status${mod ? ` home-status--${mod}` : ''}"><span class="home-status__icon" aria-hidden="true">${icon}</span>
+      <span class="home-status__txt"><b>${title}</b>${sub ? `<small>${sub}</small>` : ''}</span></div>`;
+  }
+  function nextCardHTML(f, ms) {
+    const m = fxFn('matchFor', [f, ms], null);
+    const d = S.draft;
+    const days = daysUntil(f.datum);
+    const chip = days === 0 ? 'Vandaag' : days === 1 ? 'Morgen' : days != null ? `Over ${days} dagen` : '';
+    const facts = [
+      `<li>${f.thuisUit === 'uit' ? '✈️ Uit' : '🏠 Thuis'}</li>`,
+      f.verzamel ? `<li>⏰ Verzamelen <b>${esc(f.verzamel)}</b></li>` : '',
+      f.soort && f.soort !== 'competitie' ? `<li>🏆 ${esc(f.soort)}</li>` : '',
+      f.locatie ? `<li class="home-facts__loc"><a href="https://www.google.com/maps/search/?api=1&amp;query=${encodeURIComponent(f.locatie)}" target="_blank" rel="noopener">📍 ${esc(f.locatie)}</a></li>` : '',
+    ].join('');
+    let status, btns;
+    if (m) {
+      const editing = sameId(d.savedId, m.id) && hasUnsaved(d);
+      const n = (Array.isArray(m.aanwezig) && m.aanwezig.length) || namesOf(m.periodes).length;
+      const by = byShort(m);
+      status = homeStatusHTML('✅', `Opstelling klaar${by ? ` <span class="home-status__by">· ${esc(by)}</span>` : ''}`,
+        `${n} spelers · formatie ${esc(formatieId(matchFormation(m)))}${editing ? ' · jij hebt nog niet-opgeslagen wijzigingen' : ''}`, 'ok');
+      btns = (editing ? '<button type="button" class="btn btn--secondary btn--lg" data-act="fx-continue">✏️ Verder</button>'
+        : `<button type="button" class="btn btn--secondary btn--lg" data-act="go-match" data-id="${esc(m.id)}">Bekijk schema</button>`) +
+        `<button type="button" class="btn btn--primary btn--lg" data-act="live-match" data-id="${esc(m.id)}">▶️ Start live</button>`;
+    } else if (draftForFixture(f)) {
+      status = homeStatusHTML('📝', 'Concept in bewerking', d.periodes ? 'Schema gemaakt, nog niet opgeslagen' : `${d.aanwezig.length} spelers aanwezig · nog geen schema`, 'draft');
+      btns = '<button type="button" class="btn btn--primary btn--lg btn-grid__wide" data-act="fx-continue">✏️ Verder met opstelling</button>';
+    } else {
+      status = homeStatusHTML('⏳', 'Nog geen opstelling', 'Na opslaan zien alle trainers hem meteen.');
+      btns = `<button type="button" class="btn btn--primary btn--lg btn-grid__wide" data-act="fx-plan" data-id="${esc(f.id)}">⚡ Maak opstelling</button>`;
+    }
+    return `<section class="card home-next" aria-labelledby="home-next-opp">
+      <div class="home-next__top"><span class="home-kicker">📋 Volgende wedstrijd</span>${chip ? `<span class="home-chip${days === 0 ? ' is-today' : ''}">${esc(chip)}</span>` : ''}</div>
+      <h2 class="home-next__opp" id="home-next-opp"><span class="sr-only">Tegen </span>${esc(fxShort(f))}</h2>
+      <p class="home-next__when">${esc(fmtDate(f.datum, { weekday: 'long', day: 'numeric', month: 'long' }))}${f.tijd ? ` · <b>${esc(f.tijd)}</b>` : ''}</p>
+      <ul class="home-facts">${facts}</ul>
+      ${status}
+      <div class="btn-grid home-next__btns">${btns}</div>
+    </section>`;
+  }
+  function noFixtureCardHTML() {
+    const d = S.draft;
+    const draftBusy = d && (d.periodes || d.tegenstander.trim()) && !(d.savedId != null && !d.dirty);
+    const txt = Cal.loading || !Cal.tried ? 'Kalender laden…' : Cal.fixtures.length ? 'Geen komende wedstrijden in de speelkalender.' : 'De speelkalender is nog niet geladen.';
+    return `<section class="card home-next">
+      <div class="home-next__top"><span class="home-kicker">📋 Volgende wedstrijd</span></div>
+      <p class="hint">${esc(txt)}</p>
+      ${draftBusy ? homeStatusHTML('📝', `Concept in bewerking${d.tegenstander.trim() ? ` · ${esc(d.tegenstander.trim())}` : ''}`, esc(fmtDate(d.datum, { weekday: 'long', day: 'numeric', month: 'long' })), 'draft') : ''}
+      <div class="btn-col">
+        ${draftBusy ? '<button type="button" class="btn btn--primary btn--lg btn--block" data-act="fx-continue">✏️ Verder met opstelling</button>'
+          : '<button type="button" class="btn btn--primary btn--lg btn--block" data-act="home-new">⚡ Nieuwe opstelling</button>'}
+        ${JO10.Fixtures && !Cal.fixtures.length ? `<button type="button" class="btn btn--ghost btn--block" data-act="cal-refresh"${Cal.loading ? ' disabled' : ''}>🔄 Kalender ophalen</button>` : ''}
+      </div></section>`;
+  }
+  function liveCardHTML() {
+    const id = liveRunningId(); if (id == null) return '';
+    const m = findMatch(id);
+    const sc = m.score ? ` <b class="home-live__score">${m.score.home}–${m.score.away}</b>` : '';
+    return `<div class="card card--accent home-live"><p><b>⏱️ Live bezig</b> · ${esc(m.tegenstander || 'Onbekend')}${sc}</p>
+      <button type="button" class="btn btn--primary btn--block btn--lg" data-act="live-match" data-id="${esc(id)}">Terug naar live</button></div>`;
+  }
+  function nextTraining() {
+    const today = todayISO();
+    const d = new Date(); const nowT = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+    const t = (Cal.trainings || []).find(x => x && (x.datum > today || (x.datum === today && (x.eind || x.tijd || '99:99') > nowT)));
+    if (!t) return null;
+    const wk = fxFn('trainingWeekOf', [t.datum, trainingOpts()], null);
+    const week = wk && wk.week != null ? wk.week : null;
+    return { t, week, mat: week != null ? (Cal.material[String(week)] || null) : null };
+  }
+  function laterHTML(list, ms) {
+    const tr = nextTraining();
+    if (!list.length && !tr) return '';
+    const rows = list.map(f => {
+      const m = fxFn('matchFor', [f, ms], null);
+      const d = parseISO(f.datum);
+      return `<button type="button" class="mrow mrow--compact" data-act="${m ? 'go-match' : 'fx-plan'}" data-id="${esc(m ? m.id : f.id)}">
+        <span class="mrow__date" aria-hidden="true"><b>${d ? d.getDate() : '?'}</b><small>${d ? esc(d.toLocaleDateString('nl-NL', { month: 'short' })) : ''}</small></span>
+        <span class="mrow__main"><span class="mrow__opp">${f.thuisUit === 'uit' ? '✈️' : '🏠'} ${esc(fxShort(f))}</span>
+          <span class="mrow__meta">${esc(fmtDate(f.datum, { weekday: 'short' }) + (f.tijd ? ' ' + f.tijd : ''))}</span></span>
+        <span class="fx-tag${m ? ' fx-tag--ok' : ''}">${m ? '✓ klaar' : 'Opstelling ›'}</span></button>`;
+    }).join('');
+    let trRow = '';
+    if (tr) {
+      const d = parseISO(tr.t.datum); const T = C().TRAINING || {};
+      const link = tr.week != null ? ((tr.mat && tr.mat.link) || T.materialUrl || '') : '';
+      const title = `Training${tr.week != null ? ` · week ${tr.week}` : ''}${tr.mat && tr.mat.titel ? ` · ${tr.mat.titel}` : ''}`;
+      const meta = [`${fmtDate(tr.t.datum, { weekday: 'short' })} ${tr.t.tijd}${tr.t.eind ? '–' + tr.t.eind : ''}`, tr.t.veld ? `veld ${tr.t.veld}` : ''].filter(Boolean).join(' · ');
+      const inner = `<span class="mrow__date mrow__date--tr" aria-hidden="true"><b>${d ? d.getDate() : '?'}</b><small>${d ? esc(d.toLocaleDateString('nl-NL', { month: 'short' })) : ''}</small></span>
+        <span class="mrow__main"><span class="mrow__opp">🏃 ${esc(title)}</span><span class="mrow__meta">${esc(meta)}</span></span>
+        ${link ? '<span class="fx-tag">Stof ›</span>' : ''}`;
+      trRow = link ? `<a class="mrow mrow--compact" href="${esc(link)}" target="_blank" rel="noopener">${inner}</a>` : `<div class="mrow mrow--compact">${inner}</div>`;
+    }
+    return `<div class="card"><div class="card__head"><h2 class="card__title">📅 Daarna</h2>
+        <button type="button" class="link-btn" data-act="go" data-screen="seizoen">Programma ›</button></div>
+      <div class="mlist">${rows}${trRow}</div></div>`;
+  }
+  function playedHTML(ms) {
+    const today = todayISO();
+    const list = ms.filter(m => m.score || (m.datum && m.datum < today)).sort(byDate).reverse().slice(0, 5);
+    const scored = ms.filter(m => m.score);
+    const rec = { W: 0, G: 0, V: 0 }; scored.forEach(m => { rec[resultOf(m)]++; });
+    return `<div class="card"><div class="card__head"><h2 class="card__title">📊 Gespeelde wedstrijden</h2>
+        ${scored.length ? `<span class="home-rec" aria-label="${rec.W} gewonnen, ${rec.G} gelijk, ${rec.V} verloren"><span class="c-W">${rec.W}</span>-<span class="c-G">${rec.G}</span>-<span class="c-V">${rec.V}</span></span>` : ''}</div>
+      ${list.length ? `<div class="mlist">${list.map(m => matchRowHTML(m, 'go-match')).join('')}</div>
+        <button type="button" class="link-btn fx-more" data-act="go" data-screen="seizoen">Alle wedstrijden ›</button>`
+        : '<p class="hint">Nog geen gespeelde wedstrijden. Na de wedstrijd staat de uitslag hier.</p>'}</div>`;
+  }
+  function trainersCardHTML() {
+    const tl = trainerList();
+    const names = tl.map(t => `<span class="tchip${isMe(t.name) ? ' is-me' : ''}">${esc(t.name)}${isMe(t.name) ? ' <small>jij</small>' : ''}</span>`).join('');
+    return `<div class="card home-team"><h2 class="card__title">🤝 Samen coachen</h2>
+      ${tl.length ? `<div class="tchips">${names}</div>` : '<p class="hint">Nog geen trainers ingesteld.</p>'}
+      ${tl.length < 2 ? '<button type="button" class="btn btn--secondary btn--block home-team__btn" data-act="invite">📲 Tweede trainer uitnodigen</button>' : ''}
+      <p class="hint">${me() ? `Op dit toestel ben je <b>${esc(me())}</b>. ` : ''}Alle trainers zien en bewerken dezelfde opstellingen; bij elke wijziging staat wie het deed.
+        ${me() ? '' : '<button type="button" class="link-btn" data-act="me-change">Wie ben jij?</button>'}</p></div>`;
+  }
+  function renderStart() {
+    const el = screenEl('start');
+    const ms = St.getMatches();
+    const up = upcomingFixtures(ms);
+    const name = me();
+    el.innerHTML = `<div class="container">
+      <div class="page-head home-head"><h1 class="page-title">${name ? `Hoi ${esc(name)} 👋` : 'Welkom 👋'}</h1>
+        <p class="hint">${esc(C().CALENDAR_TEAM || TEAM())}</p></div>
+      ${liveCardHTML()}
+      ${up.length ? nextCardHTML(up[0], ms) : noFixtureCardHTML()}
+      ${laterHTML(up.slice(1, 4), ms)}
+      ${playedHTML(ms)}
+      ${trainersCardHTML()}
+    </div>`;
+  }
+  async function homeNew() {
+    const d = S.draft;
+    if (d.periodes || d.savedId != null) {
+      if (hasUnsaved(d)) {
+        const ok = await confirmDialog({ title: 'Nieuwe wedstrijd?', message: 'Je huidige schema is nog niet opgeslagen. Weggooien en opnieuw beginnen?', ok: 'Ja, nieuwe wedstrijd', danger: true });
+        if (!ok) return;
+      }
+      S.draft = newDraft(); S.undo = []; S.sel = null; S.genWarnings = []; S.carouselX = {};
+      persistDraft(true);
+    }
+    go('wedstrijd', { top: true });
+  }
+
+  // ── "Wie ben jij?" & trainers ──────────────────────────────────────
+  function sessionGet(k) { try { return root.sessionStorage.getItem(k); } catch (e) { return null; } }
+  function sessionSet(k, v) { try { root.sessionStorage.setItem(k, v); } catch (e) { /* */ } }
+  function askWhoAmI() {
+    S.askMe = false;
+    const tl = trainerList(); const cur = me();
+    const known = tl.some(t => isMe(t.name));
+    openSheet({
+      title: '👋 Wie ben jij?',
+      className: 'sheet--me',
+      body: `<p class="sheet__msg">Kies je naam. Dan zien de andere trainers wie een opstelling heeft gemaakt of aangepast.</p>
+        ${tl.length ? `<div class="opt-list">${tl.map(t => `<button type="button" class="opt${isMe(t.name) ? ' is-current' : ''}" data-act="me-pick" data-name="${esc(t.name)}">
+            <span class="prow__avatar" aria-hidden="true">${esc(t.name.slice(0, 1).toUpperCase())}</span>
+            <span class="opt__text"><b>${esc(t.name)}</b><small>${esc(ROLE_LABEL(t.role))}</small></span>${isMe(t.name) ? '<span class="opt__check" aria-hidden="true">✓</span>' : ''}</button>`).join('')}</div>
+          <p class="field__label me-or">Of een andere naam:</p>` : ''}
+        <form data-form="me" class="add-row" autocomplete="off">
+          <label class="sr-only" for="in-me">Je naam</label>
+          <input class="input" id="in-me" name="name" value="${esc(known ? '' : cur)}" placeholder="Je naam, bijv. Joris" autocapitalize="words" enterkeyhint="done" maxlength="40"${tl.length ? '' : ' autofocus'}>
+          <button type="submit" class="btn btn--primary">Dat ben ik</button></form>
+        <p class="hint">Je naam wordt op dit toestel onthouden en komt in de lijst met trainers. Wijzigen kan bij 👥 Team.</p>`,
+      actions: `<button type="button" class="btn btn--ghost" data-act="sheet-close">${cur ? 'Annuleren' : 'Later'}</button>`,
+      onClose: () => { if (!me()) sessionSet('jo10_me_later', '1'); },
+    });
+  }
+  async function pickMe(raw) {
+    const n = String(raw == null ? '' : raw).trim().replace(/\s+/g, ' ');
+    if (!n) { toast('Vul je naam in.', 'warn'); const i = $('#in-me'); if (i) i.focus(); return; }
+    const err = nameError(n);
+    if (err) { toast(err, 'warn'); return; }
+    const existing = trainerList().find(t => nameKey(t.name) === nameKey(n));
+    const name = existing ? existing.name : n;
+    const e2 = St.run('setMe', [name], () => { lsSet(C().LS_ME || FALLBACK_CFG.LS_ME, name); return null; });
+    if (e2) { toast(String(e2), 'warn'); return; }
+    closeSheet(true);
+    if (!existing) {
+      const role = trainerList().length ? 'trainer' : 'hoofdtrainer';
+      const f = modFn('Store', 'addTrainer');
+      try {
+        if (f) await f({ name, role });
+        else await St.saveSquad(Object.assign(clone(St.getSquad()), { trainers: trainerList().concat([{ name, role }]) }));
+      } catch (e) { reportError(e, errMsg(e, 'Trainer toevoegen mislukt.')); }
+    }
+    toast(`Hoi ${name}! 👋 Wat je opslaat, staat nu op jouw naam.`, 'success', { ms: 3200 });
+    rerender();
+  }
+  // Na het opstarten één keer vragen (niet tijdens live, niet over een ander venster heen)
+  function maybeAskMe() {
+    if (!S.askMe || me() || sheetState || S.screen === 'live') return;
+    askWhoAmI();
+  }
+
+  // Team → Trainers
+  function trainersTeamHTML() {
+    const tl = trainerList(); const cur = me();
+    const rows = tl.map((t, i) => `<li><button type="button" class="prow" data-act="edit-trainer" data-i="${i}">
+      <span class="prow__avatar prow__avatar--tr" aria-hidden="true">${esc(t.name.slice(0, 1).toUpperCase())}</span>
+      <span class="prow__main"><span class="prow__name">${esc(t.name)}${isMe(t.name) ? ' <span class="tag tag--me">jij</span>' : ''}</span>
+        <span class="prow__meta"><span class="tag">${esc(ROLE_LABEL(t.role))}</span></span></span>
+      <span class="prow__chev" aria-hidden="true">›</span></button></li>`).join('');
+    return `<div class="card" id="team-trainers"><div class="card__head"><h2 class="card__title">🧑‍🏫 Trainers <span class="count-badge">${tl.length}</span></h2></div>
+      <p class="me-line">Op dit toestel: ${cur ? `<b>${esc(cur)}</b>` : '<i>nog niet ingesteld</i>'} <button type="button" class="link-btn" data-act="me-change">${cur ? 'Wijzig' : 'Wie ben jij?'}</button></p>
+      ${tl.length ? `<ul class="plist">${rows}</ul>` : ''}
+      <form class="add-row" data-form="add-trainer" autocomplete="off">
+        <label class="sr-only" for="in-new-trainer">Nieuwe trainer</label>
+        <input class="input" id="in-new-trainer" name="name" placeholder="Naam trainer" autocapitalize="words" enterkeyhint="done" maxlength="40">
+        <button type="submit" class="btn btn--secondary">＋ Toevoegen</button></form>
+      <button type="button" class="btn btn--primary btn--block btn--lg invite-btn" data-act="invite">📲 Tweede trainer uitnodigen</button>
+      <p class="hint">Alle trainers gebruiken dezelfde app-link en zien en bewerken dezelfde opstellingen. Bij elke opstelling staat wie hem gemaakt of gewijzigd heeft.</p></div>`;
+  }
+  async function addTrainerForm(form) {
+    const input = form.elements.namedItem('name');
+    const n = (input.value || '').trim().replace(/\s+/g, ' ');
+    if (!n) { input.focus(); return; }
+    const err = nameError(n);
+    if (err) { toast(err, 'warn'); input.focus(); return; }
+    const sq = clone(St.getSquad());
+    sq.trainers = (sq.trainers || []).slice();
+    if (sq.trainers.some(t => nameKey(t.name) === nameKey(n))) { toast(`${n} staat al bij de trainers.`, 'warn'); return; }
+    sq.trainers.push({ name: n, role: sq.trainers.length ? 'trainer' : 'hoofdtrainer' });
+    await persistSquad(sq, `${n} toegevoegd als trainer`);
+    const again = $('#in-new-trainer'); if (again) again.focus();
+  }
+  function openTrainerSheet(i) {
+    const t = trainerList()[i]; if (!t) return;
+    S.editTrainer = { name: t.name };
+    openSheet({
+      title: `${esc(t.name)}${isMe(t.name) ? ' <small class="sheet__sub">jij</small>' : ''}`,
+      body: `<div class="field"><span class="field__label" id="lbl-role">Rol</span>
+          <div class="seg" role="group" aria-labelledby="lbl-role">${['hoofdtrainer', 'trainer'].map(r =>
+            `<button type="button" class="seg__btn" data-act="tr-role" data-v="${r}" aria-pressed="${t.role === r}">${esc(ROLE_LABEL(r))}</button>`).join('')}</div></div>
+        ${isMe(t.name) ? '<p class="note note--ok">✓ Dit ben jij op dit toestel.</p>'
+          : `<div class="opt-list tr-me"><button type="button" class="opt" data-act="tr-me"><span class="opt__icon" aria-hidden="true">🙋</span><span class="opt__text"><b>Dit ben ik</b><small>Op dit toestel opslaan als ${esc(t.name)}</small></span></button></div>`}`,
+      actions: `<button type="button" class="btn btn--danger-ghost" data-act="tr-delete">🗑️ Verwijderen</button>
+        <button type="button" class="btn btn--primary" data-act="sheet-close">Klaar</button>`,
+    });
+  }
+  async function setTrainerRole(role, el) {
+    if (!S.editTrainer) return;
+    const sq = clone(St.getSquad());
+    const t = (sq.trainers || []).find(x => nameKey(x.name) === nameKey(S.editTrainer.name));
+    if (!t) { closeSheet(true); toast('Deze trainer bestaat niet meer.', 'warn'); renderTeam(); return; }
+    if (t.role === role) return;
+    t.role = role === 'hoofdtrainer' ? 'hoofdtrainer' : 'trainer';
+    $$('#sheet-root [data-act="tr-role"]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === t.role)));
+    await persistSquad(sq, `${t.name}: ${ROLE_LABEL(t.role).toLowerCase()}`);
+  }
+  async function deleteTrainer() {
+    if (!S.editTrainer) return;
+    const name = S.editTrainer.name;
+    const ok = await confirmDialog({ title: `${name} verwijderen?`, message: `${name} verdwijnt uit de lijst met trainers. Opgeslagen opstellingen houden de naam. De app-link blijft werken.`, ok: 'Verwijderen', danger: true });
+    if (!ok) return;
+    const sq = clone(St.getSquad());
+    sq.trainers = (sq.trainers || []).filter(t => nameKey(t.name) !== nameKey(name));
+    await persistSquad(sq, `${name} verwijderd`);
+  }
+  // Uitnodigen: de app-link (zelfde gegevens voor iedereen met de link)
+  function inviteURL() {
+    const l = root.location;
+    if (l.protocol === 'http:' || l.protocol === 'https:') return l.origin + l.pathname;
+    return String(l.href).split('#')[0].split('?')[0];
+  }
+  function inviteText() {
+    const n = me();
+    return `${n ? `${n} nodigt je uit als trainer van ${TEAM()}.` : `Je bent uitgenodigd als trainer van ${TEAM()}.`} ` +
+      `Open deze link op je telefoon, kies je naam, en je ziet en bewerkt dezelfde opstellingen.\n${inviteURL()}`;
+  }
+  function openInvite() {
+    const opt = (act, icon, title, sub) => `<button type="button" class="opt" data-act="${act}"><span class="opt__icon" aria-hidden="true">${icon}</span><span class="opt__text"><b>${title}</b>${sub ? `<small>${sub}</small>` : ''}</span></button>`;
+    openSheet({
+      title: '📲 Tweede trainer uitnodigen',
+      body: `<p class="sheet__msg">Stuur deze link naar de andere trainer. Die opent hem op zijn telefoon, kiest zijn naam, en ziet en bewerkt dezelfde opstellingen — ook live langs de lijn.</p>
+        <p class="invite-url">${esc(inviteURL())}</p>
+        <div class="opt-list">
+          ${navigator.share ? opt('invite-share', '📤', 'Delen…', 'Via het deelmenu van je telefoon') : ''}
+          ${opt('invite-wa', '💬', 'Via WhatsApp', 'Bericht met de link en korte uitleg')}
+          ${opt('invite-copy', '📋', 'Link kopiëren', '')}
+        </div>
+        <p class="hint">Tip: in Safari via Deel → “Zet op beginscherm” staat de app als icoon op de telefoon. Let op: iedereen met deze link kan de opstellingen zien en wijzigen.</p>`,
+    });
+  }
+  async function copyText(t) {
+    try { if (navigator.clipboard && navigator.clipboard.writeText) { await navigator.clipboard.writeText(t); return true; } } catch (e) { /* terugval */ }
+    try {
+      const ta = doc.createElement('textarea'); ta.value = t; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.opacity = '0';
+      doc.body.appendChild(ta); ta.select(); const ok = doc.execCommand('copy'); ta.remove(); return !!ok;
+    } catch (e) { return false; }
+  }
+  async function inviteShare() {
+    closeSheet(true);
+    try { await navigator.share({ title: `${TEAM()} Opstelling`, text: inviteText() }); }
+    catch (e) { if (!(e && e.name === 'AbortError')) inviteWhatsapp(); }
+  }
+  function inviteWhatsapp() {
+    closeSheet(true);
+    try { root.open(`https://wa.me/?text=${encodeURIComponent(inviteText())}`, '_blank', 'noopener'); } catch (e) { /* popup geblokkeerd */ }
+  }
+  async function inviteCopy() {
+    const ok = await copyText(inviteURL());
+    closeSheet(true);
+    toast(ok ? 'Link gekopieerd — plak hem in een bericht aan de andere trainer' : `Kopiëren lukte niet. De link is: ${inviteURL()}`, ok ? 'success' : 'warn', { ms: ok ? 3000 : 7000 });
+  }
+
+  // ── Meldingen als een andere trainer iets wijzigt ──
+  const announced = {};
+  function announceRemote(diffs) {
+    const nowMs = Date.now();
+    const list = diffs.filter(x => {
+      if (x.kind === 'other') return false;
+      if ((x.kind === 'score' || x.kind === 'deleted') && S.screen === 'live' && sameId(S.liveMounted, x.id)) return false;   // live meldt dit zelf
+      if (x.kind === 'lineup' && S.screen === 'wedstrijd' && S.draft && sameId(S.draft.savedId, x.id)) return false;   // editor: eigen melding/banner
+      const k = `${x.id}|${x.kind}|${(x.match && x.match.updatedAt) || ''}`;   // zelfde wijziging niet twee keer melden
+      if (announced[k] && nowMs - announced[k] < 15000) return false;
+      announced[k] = nowMs;
+      return true;
+    });
+    if (!list.length) return;
+    if (list.length > 2) {
+      const who = uniq(list.map(x => x.by).filter(Boolean));
+      toast(who.length === 1 ? `${who[0]} heeft ${list.length} wedstrijden bijgewerkt` : `${list.length} wedstrijden zijn op een ander toestel bijgewerkt`, 'info', { ms: 4500 });
+      return;
+    }
+    list.forEach(x => {
+      const opp = (x.match && (x.match.tegenstander || '').trim()) || 'Onbekend';
+      const who = x.by ? (isMe(x.by) ? 'Jij (ander toestel)' : x.by) : null;
+      const sc = x.match && x.match.score;
+      let msg;
+      if (x.kind === 'new') msg = who ? `${who} heeft een opstelling tegen ${opp} gemaakt` : `Er is een opstelling tegen ${opp} bijgekomen`;
+      else if (x.kind === 'lineup') msg = who ? `${who} heeft de opstelling tegen ${opp} aangepast` : `De opstelling tegen ${opp} is op een ander toestel aangepast`;
+      else if (x.kind === 'score') msg = `${who ? `${who} heeft de uitslag` : 'De uitslag'} tegen ${opp} ${sc ? `bijgewerkt: ${sc.home}–${sc.away}` : 'gewist'}${who ? '' : ' (ander toestel)'}`;
+      else msg = `De wedstrijd tegen ${opp} is op een ander toestel verwijderd`;
+      const canOpen = x.kind !== 'deleted' && findMatch(x.id) && !(S.screen === 'wedstrijd' && sameId(S.draft.savedId, x.id));
+      toast(msg, 'info', canOpen ? { ms: 6000, action: { label: 'Bekijk', fn: () => go('seizoen', { matchId: x.id, top: true }) } } : { ms: 5000 });
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
   // Scherm: Wedstrijd
   // ═══════════════════════════════════════════════════════════════════
   function renderWedstrijd() {
     const el = screenEl('wedstrijd');
     el.innerHTML = `<nav class="progress" id="w-progress" aria-label="Voortgang"></nav>
       <div class="container">
+        <div id="w-conflict" aria-live="polite" hidden></div>
         <div class="card" id="w-info"></div>
         <div class="card" id="w-aanwezig"></div>
         <div class="card" id="w-keepers"></div>
@@ -930,7 +1421,7 @@
         <div class="card card--schema" id="w-schema" hidden></div>
         <div class="card" id="w-actions" hidden></div>
       </div>`;
-    renderInfo(); renderAanwezig(); renderKeepers(); renderGenerate(); renderSchema(); renderActions(); renderProgress();
+    renderConflict(); renderInfo(); renderAanwezig(); renderKeepers(); renderGenerate(); renderSchema(); renderActions(); renderProgress();
   }
   function renderProgress() {
     const el = $('#w-progress'); if (!el) return;
@@ -967,8 +1458,16 @@
             <button type="button" class="seg__btn" data-act="thuisuit" data-v="uit" aria-pressed="${d.thuisUit === 'uit'}">✈️ Uit</button></div></div>
       </div>
       <p class="hint" id="opp-hint" aria-live="polite"></p>
-      ${fxHintHTML(d)}`;
+      ${fxHintHTML(d)}
+      ${editingHTML(d)}`;
     renderOppHint();
+  }
+  // Bewerk je een opgeslagen wedstrijd: wie heeft hem gemaakt / laatst gewijzigd
+  function editingHTML(d) {
+    const m = d.savedId != null ? findMatch(d.savedId) : null;
+    if (!m) return '';
+    const by = byLong(m);
+    return `<p class="attrib"><span aria-hidden="true">✏️</span> <span>Opgeslagen opstelling${by ? ` · ${esc(by.charAt(0).toLowerCase() + by.slice(1))}` : ''}</span></p>`;
   }
   function fxHintHTML(d) {
     if (!Cal.fixtures.length) return '';
@@ -1166,8 +1665,9 @@
     if (!d.periodes) { el.hidden = true; el.innerHTML = ''; return; }
     el.hidden = false;
     const saved = d.savedId != null ? findMatch(d.savedId) : null;
-    const status = saved && !d.dirty ? `<p class="saved-line is-saved">✓ Opgeslagen${saved.updatedAt ? ` om ${new Date(saved.updatedAt).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })}` : ''}</p>`
-      : saved ? '<p class="saved-line is-dirty">● Wijzigingen nog niet opgeslagen</p>' : '<p class="saved-line">Nog niet opgeslagen</p>';
+    const by = saved ? byShort(saved) : '';
+    const status = saved && !d.dirty ? `<p class="saved-line is-saved">✓ Opgeslagen${by ? ` ${esc(by)}` : saved.updatedAt ? ` om ${esc(whenTxt(saved.updatedAt))}` : ''}</p>`
+      : saved ? `<p class="saved-line is-dirty">● Wijzigingen nog niet opgeslagen${by ? `<small> · laatste versie ${esc(by)}</small>` : ''}</p>` : '<p class="saved-line">Nog niet opgeslagen</p>';
     const saveLabel = !saved ? '✅ Opslaan' : d.dirty ? '💾 Wijzigingen opslaan' : '✓ Opgeslagen';
     el.innerHTML = `<h2 class="card__title"><span class="step-num" aria-hidden="true">5</span> Klaar!</h2>
       ${status}
@@ -1195,6 +1695,7 @@
   }
   function refreshDraftUI(parts) {
     if (S.screen !== 'wedstrijd') return;
+    renderConflict();
     (parts || ['info', 'aanwezig', 'keepers', 'generate', 'schema', 'actions']).forEach(p => ({
       info: renderInfo, aanwezig: renderAanwezig, keepers: renderKeepers, generate: renderGenerate, schema: renderSchema, actions: renderActions,
     })[p]());
@@ -1380,6 +1881,29 @@
       const ok = await confirmDialog({ title: 'Schema is niet bijgewerkt', message: 'Aanwezigheid, keepers of formatie zijn gewijzigd na het maken van het schema. Toch dit schema opslaan?', ok: 'Toch opslaan', cancel: 'Eerst bijwerken' });
       if (!ok) { scrollIntoView($('#w-schema')); return null; }
     }
+    // Intussen door een andere trainer gewijzigd? Niet stil overschrijven.
+    const c = remoteConflict(d);
+    if (c) {
+      const who = conflictWho(c); const w = whenTxt(c.at);
+      const ok = await confirmDialog({ title: 'Opstelling is intussen gewijzigd',
+        message: `${who} ${who.startsWith('Jij') ? 'hebt' : 'heeft'} deze opstelling${w ? ` om ${w}` : ''} gewijzigd. Als je nu opslaat, vervang je die versie door de jouwe.`,
+        ok: 'Mijn versie opslaan', cancel: 'Annuleren', danger: true });
+      if (!ok) { renderConflict(); root.scrollTo(0, 0); return null; }
+    }
+    // Nieuwe wedstrijd terwijl er al een opstelling voor dezelfde datum en tegenstander is (bv. van de andere trainer)?
+    if (d.savedId == null) {
+      const dup = duplicateOf(d);
+      if (dup) {
+        const by = dup.createdBy || dup.updatedBy;
+        const ok = await confirmDialog({ title: 'Er is al een opstelling',
+          message: `${by ? `${isMe(by) ? 'Je hebt' : `${by} heeft`} al` : 'Er staat al'} een opstelling tegen ${dup.tegenstander} voor ${fmtDate(dup.datum)} opgeslagen. Toch een tweede wedstrijd opslaan?`,
+          ok: 'Toch opslaan', cancel: 'Annuleren' });
+        if (!ok) {
+          toast('Niet opgeslagen. Bekijk de bestaande opstelling bij 📊 Seizoen.', 'info', { action: { label: 'Bekijk', fn: () => go('seizoen', { matchId: dup.id, top: true }) } });
+          return null;
+        }
+      }
+    }
     const match = buildMatch(d);
     let saved;
     try { saved = await St.saveMatch(match); } catch (e) {
@@ -1389,10 +1913,21 @@
     }
     const rec = saved && saved.id != null ? saved : match;
     d.savedId = rec.id; d.dirty = false;
+    const cur = findMatch(rec.id) || rec;
+    d.baseUpdatedAt = +cur.updatedAt || Date.now(); d.baseSig = lineupSig(cur);
     persistDraft(true);
     refreshDraftUI(['info', 'actions']);
     toast('Opgeslagen ✓', 'success');
     return rec;
+  }
+  // Opgeslagen wedstrijd met dezelfde datum en (ongeveer) dezelfde tegenstander als dit concept
+  function sameOpp(a, b) {
+    const x = nameKey(a), y = nameKey(b);
+    return !!x && !!y && x !== 'onbekend' && (x === y || x.includes(y) || y.includes(x));
+  }
+  function duplicateOf(d) {
+    if (!d.tegenstander.trim()) return null;
+    return St.getMatches().find(m => m.datum === d.datum && !sameId(m.id, d.savedId) && sameOpp(m.tegenstander, d.tegenstander)) || null;
   }
   async function startLiveFromDraft() {
     const d = S.draft;
@@ -1554,7 +2089,8 @@
     return `<button type="button" class="mrow" data-act="${act}" data-id="${esc(m.id)}">
       <span class="mrow__date" aria-hidden="true"><b>${d ? d.getDate() : '?'}</b><small>${d ? esc(d.toLocaleDateString('nl-NL', { month: 'short' })) : ''}</small></span>
       <span class="mrow__main"><span class="mrow__opp">${m.thuisUit === 'uit' ? '✈️' : '🏠'} ${esc(m.tegenstander || m.titel || 'Onbekend')}</span>
-        <span class="mrow__meta">${esc(fmtDate(m.datum, { weekday: 'long', day: 'numeric', month: 'long' }))}</span></span>
+        <span class="mrow__meta">${esc(fmtDate(m.datum, { weekday: 'long', day: 'numeric', month: 'long' }))}</span>
+        ${byShort(m) ? `<span class="mrow__by">✏️ ${esc(byShort(m))}</span>` : ''}</span>
       ${extra || badge}</button>`;
   }
   function renderLiveList(el) {
@@ -1703,6 +2239,7 @@
       <div class="card">
         <div class="detail-head"><h1 class="detail-title">${m.thuisUit === 'uit' ? '✈️' : '🏠'} ${esc(m.tegenstander || 'Onbekend')}</h1>
           <p class="hint">${esc(fmtDate(m.datum, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }))} · ${m.thuisUit === 'uit' ? 'uit' : 'thuis'}${m.periodes.length ? ` · formatie ${esc(formatieId(matchFormation(m)))}` : ''}</p>
+          ${byLong(m) ? `<p class="attrib"><span aria-hidden="true">✏️</span> <span>${esc(byLong(m))}</span></p>` : ''}
           ${r ? `<p class="detail-score res res--${r}">${RESULT_ICON[r]} ${RESULT_LABEL[r]} <b>${m.score.home}–${m.score.away}</b></p>` : ''}</div>
         <div class="subcard"><h3 class="subcard__title">Uitslag</h3>${scoreEditorHTML(m)}</div>
         ${goals.length ? `<div class="subcard"><h3 class="subcard__title">Doelpunten</h3><ul class="goals">${goals.map(g => `<li class="goal goal--${g.team === 'away' ? 'away' : 'home'}">
@@ -1794,6 +2331,7 @@
           <button type="submit" class="btn btn--primary">＋ Toevoegen</button></form>
         <p class="hint">Tik op een speler om de naam, “liever niet”-posities of bijnamen aan te passen.</p>
       </div>
+      ${trainersTeamHTML()}
       <div class="card"><h2 class="card__title">⚙️ Wedstrijd</h2>
         <div class="set-row"><span class="set-row__label" id="lbl-per">Aantal periodes</span>
           <div class="seg seg--sm" role="group" aria-labelledby="lbl-per">${[2, 4].map(n => `<button type="button" class="seg__btn" data-act="set-periods" data-v="${n}" aria-pressed="${st.periods === n}">${n}</button>`).join('')}</div></div>
@@ -2096,6 +2634,21 @@
     board: ds => openBoard(ds.src, +ds.i),
     'fx-use': ds => { const f = fxById(ds.id); if (!f) return; fxApplyToDraft(S.draft, f); changed(); renderInfo(); renderActions(); renderProgress(); toast(`${fxShort(f)} overgenomen`, 'success', { ms: 1600 }); },
     'fx-plan': ds => fxPlan(ds.id),
+    'fx-continue': () => go('wedstrijd', { top: true }),
+    'go-match': ds => { if (findMatch(ds.id)) go('seizoen', { matchId: ds.id, top: true }); },
+    'home-new': () => homeNew(),
+    'me-change': () => askWhoAmI(),
+    'me-pick': ds => pickMe(ds.name),
+    'edit-trainer': ds => openTrainerSheet(+ds.i),
+    'tr-role': (ds, el) => setTrainerRole(ds.v, el),
+    'tr-me': () => { const t = S.editTrainer; if (t) pickMe(t.name); },
+    'tr-delete': () => deleteTrainer(),
+    invite: () => openInvite(),
+    'invite-share': () => inviteShare(),
+    'invite-wa': () => inviteWhatsapp(),
+    'invite-copy': () => inviteCopy(),
+    'conflict-load': () => conflictLoad(),
+    'conflict-keep': () => conflictKeep(),
     'fx-all': () => { S.fxAll = !S.fxAll; renderSeizoen(); },
     'tr-all': () => { S.trAll = !S.trAll; renderSeizoen(); },
     'cal-refresh': () => calRefresh(true),
@@ -2131,6 +2684,8 @@
     prompt: f => { const v = f.elements.namedItem('v').value; const st = sheetState; if (st && st.resolve) { const r = st.resolve; st.resolve = null; r(v); } closeSheet(true); },
     score: f => saveScore(f),
     'add-player': f => addPlayer(f),
+    'add-trainer': f => addTrainerForm(f),
+    me: f => pickMe(f.elements.namedItem('name').value),
     player: () => savePlayerSheet(),
   };
   function bindEvents() {
@@ -2185,8 +2740,22 @@
   function onRemoteChange() {
     if (!S.ready) return;
     try {
+      // Wat is er door een andere trainer gewijzigd? (eerste lading van een leeg toestel: niets melden)
+      const prev = S.prevMatches; markSeen();
+      const diffF = modFn('Store', 'diffByOthers');
+      if (diffF && prev && prev.length) { try { announceRemote(diffF(prev, S.prevMatches, me())); } catch (e) { console.warn('[JO10] diff', e); } }
       if (S.draft && S.draft.savedId != null && !findMatch(S.draft.savedId)) { S.draft.savedId = null; if (S.draft.periodes) S.draft.dirty = true; persistDraft(); }
-      if (S.screen === 'seizoen') renderSeizoen();
+      // Concept van een opgeslagen wedstrijd die elders gewijzigd is: volgen (geen eigen wijzigingen) of melden (wel).
+      const follow = followRemote();
+      if (follow === 'reloaded' && S.screen === 'wedstrijd' && !sheetState && !isTyping()) {
+        renderWedstrijd();
+        const m = findMatch(S.draft.savedId);
+        toast(`Opstelling bijgewerkt met de versie van ${m && m.updatedBy && !isMe(m.updatedBy) ? m.updatedBy : 'het andere toestel'}`, 'info');
+        return;
+      }
+      if (S.screen === 'wedstrijd') renderConflict();
+      if (S.screen === 'start') { if (!sheetState) renderStart(); }
+      else if (S.screen === 'seizoen') renderSeizoen();
       else if (S.screen === 'team') { if (!sheetState && !isTyping()) renderTeam(); }
       else if (S.screen === 'live') {
         if (S.liveMounted == null) renderLive();
@@ -2197,7 +2766,7 @@
           else if (up) { try { up(clone(latest)); } catch (e) { console.warn('[JO10] Live.update', e); } }
         }
       }
-      else if (S.screen === 'wedstrijd' && !isTyping() && !sheetState) { renderKeepers(); renderActions(); renderProgress(); const dl = $('#opp-list'); if (dl) dl.innerHTML = opponents().map(o => `<option value="${esc(o)}"></option>`).join(''); }
+      else if (S.screen === 'wedstrijd' && !isTyping() && !sheetState) { renderInfo(); renderKeepers(); renderActions(); renderProgress(); const dl = $('#opp-list'); if (dl) dl.innerHTML = opponents().map(o => `<option value="${esc(o)}"></option>`).join(''); }
     } catch (e) { console.warn('[JO10] onChange', e); }
   }
 
@@ -2220,12 +2789,29 @@
     ['Scheduler', 'IO', 'Live'].forEach(m => { if (!JO10[m]) console.warn(`[JO10] ${m} niet geladen`); });
     if (!JO10.Scheduler) reportError(new Error('Scheduler ontbreekt'), 'De rekenmodule is niet geladen — wisselschema maken lukt nu niet.');
     try { S.draft = restoreDraft(); } catch (e) { reportError(e, 'Je concept kon niet hersteld worden.'); S.draft = newDraft(); }
+    try { followRemote(); } catch (e) { console.warn('[JO10] followRemote', e); }
+    markSeen();
     calLoadCache();
     S.ready = true;
-    const start = SCREENS.includes(ui.screen) ? ui.screen : 'wedstrijd';
+    // Vers geopend → Start (tenzij er een wedstrijd live loopt); herladen in dezelfde sessie → laatste scherm.
+    const sameSession = sessionGet(SESSION_KEY) === '1';
+    sessionSet(SESSION_KEY, '1');
+    let start = 'start';
+    if (liveRunningId() != null) start = 'live';
+    else if (sameSession && SCREENS.includes(ui.screen)) start = ui.screen;
     S.screen = null;
     go(start);
     root.scrollTo(0, 0);
+    // "Wie ben jij?": even wachten op de trainerslijst van de server (max ~4 s), dan vragen.
+    if (!me() && sessionGet('jo10_me_later') !== '1') {
+      const t0 = Date.now();
+      const tryAsk = () => {
+        if (me()) return;
+        if (St.getStatus() === 'synced' || trainerList().length || Date.now() - t0 > 4000) { S.askMe = true; maybeAskMe(); }
+        else setTimeout(tryAsk, 250);
+      };
+      setTimeout(tryAsk, 300);
+    }
     // Speelkalender op de achtergrond verversen (cache is al direct zichtbaar)
     setTimeout(() => { calRefresh(false).catch(e => console.warn('[JO10] kalender', e)); loadMaterial(); }, 400);
   }

@@ -23,7 +23,7 @@
     return {};
   }
 
-  const LS_META = 'jo10_sync_v2';   // { known: [id], ops: { [id]: 'put'|'del' }, pending: { [id]: rec }, quarantine: { [id]: reden }, squadDirty }
+  const LS_META = 'jo10_sync_v2';   // { known: [id], ops: { [id]: 'put'|'del' }, pending: { [id]: rec }, quarantine: { [id]: reden }, squadDirty, pendingTrainers: [trainer] }
   const LS_TRASH = 'jo10_trash_v2'; // [{ match, removedAt, reason: 'deleted'|'remote' }]
   const TRASH_MAX = 200;
   const BAD_KEY_CHARS = /[.#$\/\[\]\u0000-\u001f\u007f]/;   // Firebase-sleutels mogen dit niet bevatten
@@ -185,7 +185,13 @@
     const m = isObj(raw) ? clone(raw) : {};
     const id = toNum(m.id);
     if (id !== undefined) m.id = id;
-    ['v', 'updatedAt'].forEach(k => { if (m[k] !== undefined) { const n = toNum(m[k]); if (n !== undefined) m[k] = n; } });
+    ['v', 'updatedAt', 'createdAt'].forEach(k => { if (m[k] !== undefined) { const n = toNum(m[k]); if (n !== undefined) m[k] = n; } });
+  // Wie heeft de wedstrijd gemaakt / laatst gewijzigd (trainernaam, optioneel). Leeg/null → veld weg.
+  ['createdBy', 'updatedBy'].forEach(k => {
+    if (!(k in m)) return;
+    const v = typeof m[k] === 'string' || typeof m[k] === 'number' ? sanitizeName(m[k]).slice(0, 40) : '';
+    if (v) m[k] = v; else delete m[k];
+  });
 
     m.datum = normDate(m.datum);
     if (typeof m.titel !== 'string') m.titel = m.titel === undefined || m.titel === null ? '' : String(m.titel);
@@ -239,7 +245,84 @@
       minutes: toNum(s.minutes) > 0 ? toNum(s.minutes) : (def.settings && def.settings.minutes) || 50,
     });
     if (r.updatedAt !== undefined) r.updatedAt = toNum(r.updatedAt) || 0;
+    if (r.trainers !== undefined) {
+      const trainers = normalizeTrainers(r.trainers);
+      if (trainers.length) r.trainers = trainers; else delete r.trainers;   // Firebase bewaart geen lege lijst
+    }
     return r;
+  }
+
+  // ── trainers ──────────────────────────────────────────────────────────────
+  // Squad.trainers = [{ name, role: 'hoofdtrainer'|'trainer' }] (optioneel). Namen zoals spelersnamen.
+  const ROLES = ['hoofdtrainer', 'trainer'];
+  function normalizeTrainer(t) {
+    const o = typeof t === 'string' ? { name: t } : (isObj(t) ? t : null);
+    if (!o || o.name === undefined || o.name === null) return null;
+    const name = sanitizeName(o.name);
+    if (validName(name)) return null;
+    const role = ROLES.includes(String(o.role || '').toLowerCase()) ? String(o.role).toLowerCase() : 'trainer';
+    return Object.assign({}, o, { name, role });
+  }
+  function normalizeTrainers(list) {
+    const out = [];
+    toArray(list).forEach(t => {
+      const tr = normalizeTrainer(t);
+      if (tr && !out.some(x => x.name.toLowerCase() === tr.name.toLowerCase())) out.push(tr);
+    });
+    return out.slice(0, cfg().MAX_TRAINERS || 20);
+  }
+  // Voeg ontbrekende trainers toe aan een squad (bestaande namen blijven zoals ze zijn). → nieuwe squad
+  function mergeTrainers(squad, list) {
+    const sq = clone(squad) || {};
+    const cur = normalizeTrainers(sq.trainers);
+    normalizeTrainers(list).forEach(t => { if (!cur.some(x => x.name.toLowerCase() === t.name.toLowerCase())) cur.push(t); });
+    if (cur.length) sq.trainers = cur.slice(0, cfg().MAX_TRAINERS || 20);
+    return sq;
+  }
+  function sameName(a, b) { return !!a && !!b && String(a).trim().toLowerCase() === String(b).trim().toLowerCase(); }
+
+  // ── wijzigingen van andere trainers herkennen (puur) ──────────────────────
+  // Handtekening van de opstelling (zonder uitslag/doelpunten/tijdstempels): verandert alleen als
+  // datum, tegenstander, thuis/uit, aanwezigen, keepers, formatie of periodes wijzigen.
+  function lineupSig(raw) {
+    const m = normalizeMatch(raw);
+    const per = m.periodes.map(p => {
+      const pos = {}; Object.keys(p.posities).sort().forEach(n => { pos[n] = p.posities[n]; });
+      return [pos, p.wissels.slice().sort()];
+    });
+    return JSON.stringify([m.datum, (m.tegenstander || '').trim(), m.thuisUit, (m.aanwezig || []).slice().sort(),
+      m.keepers || [], m.formatie || null, per]);
+  }
+  function scoreSig(raw) {
+    const m = normalizeMatch(raw);
+    return JSON.stringify([m.score ? [m.score.home, m.score.away] : null, (m.goals || []).length]);
+  }
+  // Vergelijk twee lijsten wedstrijden (vorige en nieuwe toestand) en geef de wijzigingen die NIET van `me` komen:
+  // [{ kind: 'new'|'lineup'|'score'|'other'|'deleted', id, by: naam|null, match }]
+  //  - by = updatedBy alleen als updatedAt echt nieuwer is (v1.html laat een oude updatedBy staan) → anders null;
+  //  - wijzigingen met by === me (zelfde naam, ook op een ander toestel) tellen niet mee.
+  function diffByOthers(prev, next, me) {
+    const keyed = list => { const map = {}; toArray(list).forEach(r => { const k = keyOf(r); if (k !== null) map[k] = r; }); return map; };
+    const P = keyed(prev), N = keyed(next);
+    const out = [];
+    Object.keys(N).forEach(k => {
+      const n = normalizeMatch(N[k]);
+      const p = P[k] ? normalizeMatch(P[k]) : null;
+      if (!p) {
+        const by = n.createdBy || n.updatedBy || null;
+        if (!sameName(by, me)) out.push({ kind: 'new', id: n.id, by, match: n });
+        return;
+      }
+      const newer = (toNum(n.updatedAt) || 0) > (toNum(p.updatedAt) || 0);
+      const lineup = lineupSig(p) !== lineupSig(n);
+      const score = scoreSig(p) !== scoreSig(n);
+      if (!newer && !lineup && !score) return;
+      const by = newer ? (n.updatedBy || null) : null;
+      if (sameName(by, me)) return;
+      out.push({ kind: lineup ? 'lineup' : score ? 'score' : 'other', id: n.id, by, match: n });
+    });
+    Object.keys(P).forEach(k => { if (!N[k]) { const p = normalizeMatch(P[k]); out.push({ kind: 'deleted', id: p.id, by: null, match: p }); } });
+    return out;
   }
 
   // Pure merge: pas lokale ops toe op een (remote) array. Records die we niet kennen blijven staan.
@@ -265,7 +348,7 @@
       raw: [],                 // wedstrijden zoals opgeslagen (niet genormaliseerd, met alle onbekende velden)
       squad: null,             // genormaliseerde squad of null (→ default)
       squadDenied: false,
-      meta: { known: [], ops: {}, pending: {}, quarantine: {}, squadDirty: false },
+      meta: { known: [], ops: {}, pending: {}, quarantine: {}, squadDirty: false, pendingTrainers: [] },
       revs: {}, rev: 0,
       status: 'offline',
       statusCbs: statusCbs || [],
@@ -273,6 +356,7 @@
       refs: null,
       connected: false,
       gotRemote: false,
+      gotRemoteSquad: false,   // jo10_squad minstens één keer van de server gelezen
       matchesDenied: false,
       flushQueued: false,
       syncError: null,         // laatste transactiefout → status 'error' + back-off
@@ -367,6 +451,7 @@
         pending: isObj(meta.pending) ? meta.pending : {},
         quarantine: isObj(meta.quarantine) ? meta.quarantine : {},
         squadDirty: !!meta.squadDirty,
+        pendingTrainers: normalizeTrainers(meta.pendingTrainers),
       };
       // Openstaande records terugzetten als v1.html (of een volle quota) de gedeelde cache heeft overschreven.
       Object.keys(S.meta.pending).forEach(k => {
@@ -379,7 +464,7 @@
     } else {
       // Eerste start van v2 op dit toestel: neem aan dat de cache van de server kwam (geen wederopstanding).
       // Wat daarna bij de eerste snapshot wegvalt, gaat naar de prullenbak.
-      S.meta = { known: S.raw.map(keyOf).filter(k => k !== null), ops: {}, pending: {}, quarantine: {}, squadDirty: false };
+      S.meta = { known: S.raw.map(keyOf).filter(k => k !== null), ops: {}, pending: {}, quarantine: {}, squadDirty: false, pendingTrainers: [] };
     }
     Object.keys(S.meta.ops).forEach(bumpRev);
   }
@@ -521,14 +606,29 @@
   }
 
   function handleRemoteSquad(val) {
+    S.gotRemoteSquad = true;
     if (isObj(val) && val.players !== undefined) {
       if (S.meta.squadDirty) { pushSquad(); return; }   // lokale wijziging nog niet bevestigd → lokaal wint
-      const sq = normalizeSquad(val);
+      let sq = normalizeSquad(val);
+      // Trainer die zich op dit toestel aanmeldde vóór de selectie binnen was: nu pas samenvoegen en versturen,
+      // zodat een (verouderde) lokale selectie nooit de echte overschrijft.
+      const pend = S.meta.pendingTrainers || [];
+      if (pend.length) {
+        const merged = normalizeSquad(mergeTrainers(sq, pend));
+        S.meta.pendingTrainers = [];
+        if (!same(merged, sq)) {
+          sq = normalizeSquad(Object.assign({}, merged, { updatedAt: now() }));
+          if (!S.squadDenied) S.meta.squadDirty = true;
+        }
+        persistMeta();
+      }
       const changed = !same(sq, S.squad);
       S.squad = sq;
       writeJSON(cfg().LS_SQUAD || 'jo10_squad_v2', sq);
       if (changed) scheduleChange();
+      if (S.meta.squadDirty) pushSquad();
     } else if ((val === null || val === undefined) && S.squad) {
+      if ((S.meta.pendingTrainers || []).length) { S.meta.pendingTrainers = []; persistMeta(); }   // zitten al in S.squad
       pushSquad();   // remote leeg, lokaal een eigen selectie → zaaien
     }
   }
@@ -645,6 +745,16 @@
     if (m.tegenstander && m.tegenstander.trim()) m.titel = buildTitel(m.tegenstander.trim(), m.thuisUit);
     if (m.v === undefined) m.v = 2;
     m.updatedAt = now();
+    const key0 = keyOf(m);
+    const isNew = !S.raw.some(r => keyOf(r) === key0) && !S.meta.pending[key0];
+    // Wie: trainer van dit toestel. Zonder naam updatedBy expliciet leegmaken (null), anders blijft via de
+    // merge de naam van de vorige trainer staan terwijl updatedAt nieuwer is.
+    const me = getMe();
+    m.updatedBy = me || null;
+    if (isNew) {
+      if (!m.createdBy && me) m.createdBy = me;
+      if (m.createdAt === undefined) m.createdAt = m.updatedAt;
+    }
     const clean = clone(m);   // haalt undefined weg (Firebase weigert undefined)
     const key = keyOf(clean);
     const idx = S.raw.findIndex(r => keyOf(r) === key);
@@ -656,7 +766,7 @@
     bumpRev(key);
     persistMatches();
     persistMeta();
-    const result = normalizeMatch(clean);
+    const result = normalizeMatch(idx >= 0 ? S.raw[idx] : clean);
     if (!canFlush()) { settleStatus(); return Promise.resolve(result); }
     return withTimeout(flush(), flushTimeoutMs()).then(() => result);
   }
@@ -711,6 +821,42 @@
     return getSquad().players.filter(p => p.active !== false).map(p => p.name);
   }
 
+  // ── trainer op dit toestel ────────────────────────────────────────────────
+  function lsMe() { return cfg().LS_ME || 'jo10_me_v2'; }
+  function getMe() {
+    let v = null;
+    try { v = envLS().getItem(lsMe()); } catch (e) { v = null; }
+    const name = v ? sanitizeName(v) : '';
+    return name && !validName(name) ? name : '';
+  }
+  // → NL-foutmelding of null. Lege naam = vergeten.
+  function setMe(name) {
+    const raw = name === undefined || name === null ? '' : String(name).replace(/\s+/g, ' ').trim();
+    if (!raw) { try { envLS().removeItem(lsMe()); } catch (e) { /* ignore */ } return null; }
+    const err = validName(raw);
+    if (err) return err;
+    const s = sanitizeName(raw);
+    try { envLS().setItem(lsMe(), s); } catch (e) { /* privémodus */ }
+    return null;
+  }
+  // Trainer aan de selectie toevoegen (bv. via "Wie ben jij?" op een nieuw toestel). Is de selectie nog niet van
+  // de server gelezen, dan alleen lokaal tonen en pas samenvoegen + versturen als die binnen is.
+  function addTrainer(t) {
+    const rawErr = validName(isObj(t) ? t.name : t);
+    if (rawErr) return Promise.reject(new Error(rawErr));
+    const tr = normalizeTrainer(t);
+    if (!tr) return Promise.reject(new Error('Ongeldige naam'));
+    const cur = getSquad();
+    if (normalizeTrainers(cur.trainers).some(x => sameName(x.name, tr.name))) return Promise.resolve(cur);
+    const merged = mergeTrainers(cur, [tr]);
+    if (S.gotRemoteSquad || S.squadDenied) return saveSquad(merged).then(getSquad);
+    S.meta.pendingTrainers = normalizeTrainers((S.meta.pendingTrainers || []).concat([tr]));
+    persistMeta();
+    S.squad = normalizeSquad(merged);
+    writeJSON(cfg().LS_SQUAD || 'jo10_squad_v2', S.squad);
+    return Promise.resolve(getSquad());
+  }
+
   function getDraft() { const d = readJSON(cfg().LS_DRAFT || 'jo10_draft_v2', null); return isObj(d) ? d : null; }
   function saveDraft(draft) { writeJSON(cfg().LS_DRAFT || 'jo10_draft_v2', draft); }
   function clearDraft() { try { envLS().removeItem(cfg().LS_DRAFT || 'jo10_draft_v2'); } catch (e) { /* ignore */ } }
@@ -731,6 +877,7 @@
     init, getMatches, saveMatch, deleteMatch, getSquad, saveSquad, activePlayers,
     getDraft, saveDraft, clearDraft, getStatus, onStatus, normalizeMatch, normalizeSquad,
     getTrash, restoreFromTrash, validName,
+    getMe, setMe, addTrainer, normalizeTrainers, mergeTrainers, lineupSig, diffByOthers,
     // intern / tests
     _setEnv, _reset, _applyOps: applyOps, _flush: flush, _state: () => S, _findBadKey: findBadKey, LS_META, LS_TRASH,
   };
